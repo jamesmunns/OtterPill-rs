@@ -17,6 +17,9 @@ enum TogCount {
 #[entry]
 fn main() -> ! {
     if let Some(p) = stm32::Peripherals::take() {
+        //////////////////////////////////////////////////////////////////////
+        // Set up the hardware!
+        //////////////////////////////////////////////////////////////////////
         let (usb, rcc, crs, mut flash, gpioa, gpiob) =
             (p.USB, p.RCC, p.CRS, p.FLASH, p.GPIOA, p.GPIOB);
 
@@ -39,6 +42,9 @@ fn main() -> ! {
             (usb_dm, usb_dp, gpiob.pb13.into_push_pull_output(cs))
         });
 
+        //////////////////////////////////////////////////////////////////////
+        // Blink a few times to show we've [re]-booted
+        //////////////////////////////////////////////////////////////////////
         for _ in 0..3 {
             // Turn PA1 on ten million times in a row
             for _ in 0..180_000 {
@@ -52,6 +58,9 @@ fn main() -> ! {
 
         led.set_high().ok();
 
+        //////////////////////////////////////////////////////////////////////
+        // Set up USB as a CDC ACM Serial Port
+        //////////////////////////////////////////////////////////////////////
         let usb_bus = UsbBus::new(usb, (usb_dm, usb_dp));
 
         let mut serial = SerialPort::new(&usb_bus);
@@ -68,6 +77,9 @@ fn main() -> ! {
         let mut togs = 0;
 
         'reset: loop {
+            //////////////////////////////////////////////////////////////////
+            // If the USB port is idle, blink to show we are bored
+            //////////////////////////////////////////////////////////////////
             if !usb_dev.poll(&mut [&mut serial]) {
                 use TogCount::*;
                 tog = match tog {
@@ -85,16 +97,26 @@ fn main() -> ! {
                     Off(n) => Off(n + 1),
                 };
 
+                //////////////////////////////////////////////////////////////
+                // After a while, just crash and reboot so we can press the
+                // DFU button on reboot
+                //////////////////////////////////////////////////////////////
                 assert!(togs <= 60);
 
                 continue;
             } else {
+                //////////////////////////////////////////////////////////////
+                // When active, reset the idle counter
+                //////////////////////////////////////////////////////////////
                 tog = TogCount::Off(0);
                 led.set_low().ok();
             }
 
             let mut buf = [0u8; 64];
 
+            //////////////////////////////////////////////////////////////////
+            // Loopback as upper case, use 'z' to force a reboot of the device
+            //////////////////////////////////////////////////////////////////
             match serial.read(&mut buf) {
                 Ok(count) if count > 0 => {
                     led.set_high().ok(); // Turn on
@@ -105,7 +127,7 @@ fn main() -> ! {
                             break 'reset;
                         }
 
-                        if 0x61 <= *c && *c <= 0x7a {
+                        if b'a' <= *c && *c <= b'z' {
                             *c &= !0x20;
                         }
                     }
