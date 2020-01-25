@@ -9,3 +9,6 @@ Messing around with the [OtterPill] in [Embedded Rust]. Will likely become a Boa
 
 * [hello-f072]: A basic USB-Serial echo + hello world blinky in Rust
 * [vintage]: A WIP time tracking tool using the Adafruit NeoTrellis and Harvest
+
+[hello-f072]: ./hello-f072
+[vintage]: ./vintage
