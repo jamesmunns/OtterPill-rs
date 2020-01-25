@@ -4,3 +4,8 @@ Messing around with the [OtterPill] in [Embedded Rust]. Will likely become a Boa
 
 [OtterPill]: https://github.com/Jan--Henrik/OtterPill
 [Embedded Rust]: https://github.com/rust-embedded/wg
+
+## Projects
+
+* [hello-f072]: A basic USB-Serial echo + hello world blinky in Rust
+* [vintage]: A WIP time tracking tool using the Adafruit NeoTrellis and Harvest
