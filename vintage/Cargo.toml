@@ -13,6 +13,10 @@ panic-reset = "0.1"
 usb-device = "0.2.1"
 usbd-serial = "0.1"
 
+[dependencies.adafruit-seesaw]
+version = "0.1"
+path = "../adafruit-seesaw"
+
 [profile.release]
 lto             = true
 panic           = "abort"

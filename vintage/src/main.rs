@@ -1,13 +1,15 @@
 #![no_main]
 #![no_std]
 
-use crate::hal::{prelude::*, stm32};
+use crate::hal::{prelude::*, stm32, i2c::I2c, delay::Delay};
 use cortex_m_rt::entry;
 use panic_reset as _;
 use stm32_usbd::UsbBus;
 use stm32f0xx_hal as hal;
 use usb_device::prelude::*;
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
+use adafruit_seesaw as seesaw;
+use cortex_m;
 
 enum TogCount {
     On(usize),
@@ -16,14 +18,14 @@ enum TogCount {
 
 #[entry]
 fn main() -> ! {
-    if let Some(p) = stm32::Peripherals::take() {
+    if let (Some(p), Some(cp)) = (stm32::Peripherals::take(), cortex_m::Peripherals::take()) {
         //////////////////////////////////////////////////////////////////////
         // Set up the hardware!
         //////////////////////////////////////////////////////////////////////
-        let (usb, rcc, crs, mut flash, gpioa, gpiob) =
-            (p.USB, p.RCC, p.CRS, p.FLASH, p.GPIOA, p.GPIOB);
+        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1) =
+            (p.USB, p.RCC, p.CRS, p.FLASH, p.GPIOA, p.GPIOB, p.I2C1);
 
-        let (usb_dm, usb_dp, mut led) = cortex_m::interrupt::free(|cs| {
+        let (usb_dm, usb_dp, mut led, i2c, delay) = cortex_m::interrupt::free(|cs| {
             let mut rcc = rcc
                 .configure()
                 .hsi48()
@@ -38,9 +40,21 @@ fn main() -> ! {
             let usb_dm = gpioa.pa11;
             let usb_dp = gpioa.pa12;
 
-            // (Re-)configure PA1 as output
-            (usb_dm, usb_dp, gpiob.pb13.into_push_pull_output(cs))
+            let scl = gpiob.pb6.into_alternate_af1(&cs);
+            let sda = gpiob.pb7.into_alternate_af1(&cs);
+
+            let i2c = I2c::i2c1(i2c1, (scl, sda), 100.khz(), &mut rcc);
+
+            let delay = Delay::new(cp.SYST, &rcc);
+
+            (usb_dm, usb_dp, gpiob.pb13.into_push_pull_output(cs), i2c, delay)
         });
+
+        let mut _trellis = seesaw::SeeSaw {
+            i2c,
+            delay,
+            address: 0xAF // TODO: FIXME
+        };
 
         //////////////////////////////////////////////////////////////////////
         // Blink a few times to show we've [re]-booted
@@ -149,5 +163,6 @@ fn main() -> ! {
         }
     }
 
-    panic!();
+    // panic!();
+    loop { continue; }
 }
