@@ -76,7 +76,9 @@ fn main() -> ! {
         //////////////////////////////////////////////////////////////////////
         let usb_bus = UsbBus::new(usb, (usb_dm, usb_dp));
 
+
         let mut serial = SerialPort::new(&usb_bus);
+
 
         let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27DD))
             .manufacturer("Fake company")
@@ -85,22 +87,15 @@ fn main() -> ! {
             .device_class(USB_CLASS_CDC)
             .build();
 
+        // Force
+        usb_dev.bus().force_reenumeration(|| {
+            delay.delay_us(1_000_000u32);
+        });
+
         let mut tog = TogCount::Off(0);
         led.set_low().ok();
         let mut togs = 0;
 
-        // for _ in 0..7 {
-        //     // Turn PA1 on ten million times in a row
-        //     for _ in 0..1_800_000 {
-        //         led.set_high().ok();
-        //     }
-        //     // Then turn PA1 off a million times in a row
-        //     for _ in 0..2_400_000 {
-        //         led.set_low().ok();
-        //     }
-        // }
-
-        // delay.delay_us(1_000_000u32);
 
         let mut trellis = seesaw::SeeSaw {
             i2c,
@@ -145,10 +140,16 @@ fn main() -> ! {
         // }
 
         // panic!();
+        use heapless::String;
+        use heapless::consts::*;
+        use core::fmt::Write;
 
-        let mut once = false;
+        let mut string_buf: String<U1024> = String::new();
 
-        'reset: loop {
+        let mut panic_report_once = false;
+        let mut any_input = false;
+
+        'outer: loop {
             //////////////////////////////////////////////////////////////////
             // If the USB port is idle, blink to show we are bored
             //////////////////////////////////////////////////////////////////
@@ -173,7 +174,9 @@ fn main() -> ! {
                 // After a while, just crash and reboot so we can press the
                 // DFU button on reboot
                 //////////////////////////////////////////////////////////////
-                assert!(togs <= 60);
+                if !any_input && (togs >= 10) {
+                    panic!("Input Timeout");
+                }
 
                 continue;
             } else {
@@ -192,81 +195,60 @@ fn main() -> ! {
             match serial.read(&mut buf) {
                 Ok(count) if count > 0 => {
                     led.set_high().ok(); // Turn on
+                    any_input = true;
+
 
                     // Echo back in upper case
                     for c in buf[0..count].iter_mut() {
                         if *c == b'z' {
-                            break 'reset;
+                            panic!("reset requested");
                         }
 
-                        if !once && *c == b'p' {
-                            once = true;
+                        if !panic_report_once && *c == b'p' {
+                            panic_report_once = true;
 
-                            while serial.write(&[b'\r', b'\n']).is_err() {}
+                            println_blocking(&mut serial, "");
 
                             if let Some(msg_b) = get_panic_message_bytes() {
-                                let mut write_offset = 0;
-                                let count = msg_b.len();
-                                while write_offset < count {
-                                    match serial.write(&msg_b[write_offset..count]) {
-                                        Ok(len) if len > 0 => {
-                                            write_offset += len;
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                                println_blocking_bytes(&mut serial, msg_b);
                             } else {
-                                let msg_b = "No panic.".as_bytes();
-                                let count = msg_b.len();
-                                let mut write_offset = 0;
-
-                                while write_offset < count {
-                                    match serial.write(&msg_b[write_offset..count]) {
-                                        Ok(len) if len > 0 => {
-                                            write_offset += len;
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                                println_blocking(&mut serial, "No Panic.");
                             }
 
-                            while serial.write(&[b'\r', b'\n']).is_err() {}
-
-                            continue;
+                            continue 'outer;
                         }
 
                         if *c == b't' {
-                            while serial.write(&[b'\r', b'\n']).is_err() {}
+                            println_blocking(&mut serial, "");
 
                             if let Ok(i) = trellis.keypad_get_count() {
-                                let msg_b = "Good Trellis.".as_bytes();
-                                let count = msg_b.len();
-                                let mut write_offset = 0;
+                                println_blocking(&mut serial, "Good Trellis.");
 
-                                while write_offset < count {
-                                    match serial.write(&msg_b[write_offset..count]) {
-                                        Ok(len) if len > 0 => {
-                                            write_offset += len;
-                                        }
-                                        _ => {}
-                                    }
+                                string_buf.clear();
+
+                                if let Ok(_) = write!(&mut string_buf, "{} buttons", i) {
+                                    println_blocking(&mut serial, &string_buf);
                                 }
+
                             } else {
-                                let msg_b = "Bad Trellis.".as_bytes();
-                                let count = msg_b.len();
-                                let mut write_offset = 0;
-
-                                while write_offset < count {
-                                    match serial.write(&msg_b[write_offset..count]) {
-                                        Ok(len) if len > 0 => {
-                                            write_offset += len;
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                                println_blocking(&mut serial, "Bad Trellis.");
                             }
 
-                            while serial.write(&[b'\r', b'\n']).is_err() {}
+                            continue 'outer;
+                        }
+
+                        if *c == b'n' {
+                            if trellis.neopixel_set_buf_length_bytes(4).is_err() {
+                                println_blocking(&mut serial, "Bad Buf Set");
+                            } else if trellis.neopixel_write_buf_raw(0, &[0xF0, 0xF0, 0xF0, 0xF0]).is_err() {
+                                println_blocking(&mut serial, "Bad Buf Write");
+                            } else if trellis.neopixel_show().is_err() {
+                                println_blocking(&mut serial, "Bad Show")
+                            } else {
+                                println_blocking(&mut serial, "Neopixel set!");
+                            }
+
+                            continue 'outer;
                         }
 
                         if b'a' <= *c && *c <= b'z' {
@@ -274,15 +256,7 @@ fn main() -> ! {
                         }
                     }
 
-                    let mut write_offset = 0;
-                    while write_offset < count {
-                        match serial.write(&buf[write_offset..count]) {
-                            Ok(len) if len > 0 => {
-                                write_offset += len;
-                            }
-                            _ => {}
-                        }
-                    }
+                    print_blocking_bytes(&mut serial, &buf);
                 }
                 _ => {}
             }
@@ -291,5 +265,56 @@ fn main() -> ! {
         }
     }
 
-    panic!("reset requested");
+    loop {
+        continue;
+    }
+}
+
+use core::borrow::BorrowMut;
+
+fn print_blocking<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg: &str)
+where
+    B: usb_device::bus::UsbBus,
+    RS: BorrowMut<[u8]>,
+    WS: BorrowMut<[u8]>,
+{
+    print_blocking_bytes(usb, msg.as_bytes())
+}
+
+fn println_blocking<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg: &str)
+where
+    B: usb_device::bus::UsbBus,
+    RS: BorrowMut<[u8]>,
+    WS: BorrowMut<[u8]>,
+{
+    println_blocking_bytes(usb, msg.as_bytes())
+}
+
+fn print_blocking_bytes<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg_b: &[u8])
+where
+    B: usb_device::bus::UsbBus,
+    RS: BorrowMut<[u8]>,
+    WS: BorrowMut<[u8]>,
+{
+    let count = msg_b.len();
+    let mut write_offset = 0;
+
+    while write_offset < count {
+        match usb.write(&msg_b[write_offset..count]) {
+            Ok(len) if len > 0 => {
+                write_offset += len;
+            }
+            _ => {}
+        }
+    }
+}
+
+fn println_blocking_bytes<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg_b: &[u8])
+where
+    B: usb_device::bus::UsbBus,
+    RS: BorrowMut<[u8]>,
+    WS: BorrowMut<[u8]>,
+{
+    print_blocking_bytes(usb, msg_b);
+    print_blocking_bytes(usb, &[b'\r', b'\n']);
 }
