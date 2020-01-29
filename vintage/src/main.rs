@@ -292,7 +292,11 @@ fn main() -> ! {
                                     write!(&mut string_buf, "Events: ").ok();
 
                                     for e in evts {
-                                        write!(&mut string_buf, "{:02X} ", e).ok();
+                                        let event = *e & 0b0000_0011;
+                                        let key = *e >> 2;
+                                        let key = (((key) / 8) * 4 + ((key) % 8));
+
+                                        write!(&mut string_buf, "(k: {}, e: {}) ", key, event).ok();
                                     }
                                     println_blocking(&mut serial, &string_buf);
                                 }
