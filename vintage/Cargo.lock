@@ -101,8 +101,8 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
-name = "panic-reset"
-version = "0.1.0"
+name = "panic-persist"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "cortex-m 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -239,7 +239,8 @@ dependencies = [
  "adafruit-seesaw 0.1.0",
  "cortex-m 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "cortex-m-rt 0.6.11 (registry+https://github.com/rust-lang/crates.io-index)",
- "panic-reset 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "embedded-hal 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "panic-persist 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "stm32-usbd 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "stm32f0xx-hal 0.15.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "usb-device 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -271,7 +272,7 @@ dependencies = [
 "checksum generic-array 0.12.3 (registry+https://github.com/rust-lang/crates.io-index)" = "c68f0274ae0e023facc3c97b2e00f076be70e254bc851d972503b328db79b2ec"
 "checksum generic-array 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)" = "0ed1e761351b56f54eb9dcd0cfaca9fd0daecf93918e1cfc01c8a3d26ee7adcd"
 "checksum nb 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "b1411551beb3c11dedfb0a90a0fa256b47d28b9ec2cdff34c25a2fa59e45dbdc"
-"checksum panic-reset 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "acee8535a38487c5c70d61ee87284710452cb3b265304463f20a0c5327a4a8a5"
+"checksum panic-persist 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dd2e692a5954e3eb0c16f5dbaa75c4332a78d85851521f138c04ad95d6f5ee42"
 "checksum proc-macro2 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3acb317c6ff86a4e579dfa00fc5e6cca91ecbb4e7eb2df0468805b674eb88548"
 "checksum quote 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "053a8c8bcc71fcce321828dc897a98ab9760bef03a4fc36693c231e5b3216cfe"
 "checksum r0 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "e2a38df5b15c8d5c7e8654189744d8e396bddc18ad48041a500ce52d6948941f"

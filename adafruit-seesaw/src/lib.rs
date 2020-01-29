@@ -6,7 +6,7 @@
 
 use ehal::blocking::{
     delay::DelayUs,
-    i2c::{Read, Write},
+    i2c::{WriteRead, Write},
 };
 use embedded_hal as ehal;
 
@@ -34,7 +34,7 @@ const DEFAULT_DELAY_US: u32 = 5_000; // 5ms
 
 impl<I2C, DELAY> SeeSaw<I2C, DELAY>
 where
-    I2C: Read + Write,
+    I2C: WriteRead + Write,
     DELAY: DelayUs<u32>,
 {
     fn write(&mut self, base: u8, function: u8, buf: &[u8]) -> Result<(), Error> {
@@ -48,17 +48,16 @@ where
 
         tx_buf[0] = base;
         tx_buf[1] = function;
-        tx_buf[2..end].copy_from_slice(buf);
 
         self.i2c
-            .write(self.address, &buf[..end])
+            .write(self.address, &tx_buf[..end])
             .map_err(|_| Error::I2c)
     }
 
     fn read(&mut self, base: u8, function: u8, delay_us: u32, buf: &mut [u8]) -> Result<(), Error> {
         self.write(base, function, &[])?;
         self.delay.delay_us(delay_us);
-        self.i2c.read(self.address, buf).map_err(|_| Error::I2c)
+        self.i2c.write_read(self.address, &[], buf).map_err(|_| Error::I2c)
     }
 
     /// Get the count of keys on the keypad

@@ -3,13 +3,17 @@
 
 use crate::hal::{prelude::*, stm32, i2c::I2c, delay::Delay};
 use cortex_m_rt::entry;
-use panic_reset as _;
+use panic_persist::{self as _, get_panic_message_bytes};
 use stm32_usbd::UsbBus;
 use stm32f0xx_hal as hal;
 use usb_device::prelude::*;
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
 use adafruit_seesaw as seesaw;
 use cortex_m;
+use embedded_hal::blocking::{
+    i2c::{WriteRead, Write},
+    delay::DelayUs,
+};
 
 enum TogCount {
     On(usize),
@@ -25,7 +29,7 @@ fn main() -> ! {
         let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1) =
             (p.USB, p.RCC, p.CRS, p.FLASH, p.GPIOA, p.GPIOB, p.I2C1);
 
-        let (usb_dm, usb_dp, mut led, i2c, delay) = cortex_m::interrupt::free(|cs| {
+        let (usb_dm, usb_dp, mut led, i2c, mut delay) = cortex_m::interrupt::free(|cs| {
             let mut rcc = rcc
                 .configure()
                 .hsi48()
@@ -50,11 +54,6 @@ fn main() -> ! {
             (usb_dm, usb_dp, gpiob.pb13.into_push_pull_output(cs), i2c, delay)
         });
 
-        let mut _trellis = seesaw::SeeSaw {
-            i2c,
-            delay,
-            address: 0xAF // TODO: FIXME
-        };
 
         //////////////////////////////////////////////////////////////////////
         // Blink a few times to show we've [re]-booted
@@ -89,6 +88,65 @@ fn main() -> ! {
         let mut tog = TogCount::Off(0);
         led.set_low().ok();
         let mut togs = 0;
+
+        // for _ in 0..7 {
+        //     // Turn PA1 on ten million times in a row
+        //     for _ in 0..1_800_000 {
+        //         led.set_high().ok();
+        //     }
+        //     // Then turn PA1 off a million times in a row
+        //     for _ in 0..2_400_000 {
+        //         led.set_low().ok();
+        //     }
+        // }
+
+        // delay.delay_us(1_000_000u32);
+
+        let mut trellis = seesaw::SeeSaw {
+            i2c,
+            delay,
+            address: 0x2E // TODO: FIXME
+        };
+
+        // for _ in 0..2 {
+        //     // Turn PA1 on ten million times in a row
+        //     for _ in 0..1_800_000 {
+        //         led.set_high().ok();
+        //     }
+        //     // Then turn PA1 off a million times in a row
+        //     for _ in 0..2_400_000 {
+        //         led.set_low().ok();
+        //     }
+        // }
+
+
+        // if let Ok(i) = trellis.keypad_get_count() {
+        //     for _ in 0..(i as usize) {
+        //         // Turn PA1 on ten million times in a row
+        //         for _ in 0..180_000 {
+        //             led.set_high().ok();
+        //         }
+        //         // Then turn PA1 off a million times in a row
+        //         for _ in 0..240_000 {
+        //             led.set_low().ok();
+        //         }
+        //     }
+        // } else {
+        //     for _ in 0..3 {
+        //         // Turn PA1 on ten million times in a row
+        //         for _ in 0..1_800_000 {
+        //             led.set_high().ok();
+        //         }
+        //         // Then turn PA1 off a million times in a row
+        //         for _ in 0..2_400_000 {
+        //             led.set_low().ok();
+        //         }
+        //     }
+        // }
+
+        // panic!();
+
+        let mut once = false;
 
         'reset: loop {
             //////////////////////////////////////////////////////////////////
@@ -141,6 +199,76 @@ fn main() -> ! {
                             break 'reset;
                         }
 
+                        if !once && *c == b'p' {
+                            once = true;
+
+                            while serial.write(&[b'\r', b'\n']).is_err() {}
+
+                            if let Some(msg_b) = get_panic_message_bytes() {
+                                let mut write_offset = 0;
+                                let count = msg_b.len();
+                                while write_offset < count {
+                                    match serial.write(&msg_b[write_offset..count]) {
+                                        Ok(len) if len > 0 => {
+                                            write_offset += len;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            } else {
+                                let msg_b = "No panic.".as_bytes();
+                                let count = msg_b.len();
+                                let mut write_offset = 0;
+
+                                while write_offset < count {
+                                    match serial.write(&msg_b[write_offset..count]) {
+                                        Ok(len) if len > 0 => {
+                                            write_offset += len;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+
+                            while serial.write(&[b'\r', b'\n']).is_err() {}
+
+                            continue;
+                        }
+
+                        if *c == b't' {
+                            while serial.write(&[b'\r', b'\n']).is_err() {}
+
+                            if let Ok(i) = trellis.keypad_get_count() {
+                                let msg_b = "Good Trellis.".as_bytes();
+                                let count = msg_b.len();
+                                let mut write_offset = 0;
+
+                                while write_offset < count {
+                                    match serial.write(&msg_b[write_offset..count]) {
+                                        Ok(len) if len > 0 => {
+                                            write_offset += len;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            } else {
+                                let msg_b = "Bad Trellis.".as_bytes();
+                                let count = msg_b.len();
+                                let mut write_offset = 0;
+
+                                while write_offset < count {
+                                    match serial.write(&msg_b[write_offset..count]) {
+                                        Ok(len) if len > 0 => {
+                                            write_offset += len;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+
+                            while serial.write(&[b'\r', b'\n']).is_err() {}
+                        }
+
                         if b'a' <= *c && *c <= b'z' {
                             *c &= !0x20;
                         }
@@ -163,6 +291,5 @@ fn main() -> ! {
         }
     }
 
-    // panic!();
-    loop { continue; }
+    panic!("reset requested");
 }

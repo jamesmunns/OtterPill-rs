@@ -2,11 +2,11 @@
 command = "cargo"
 args= [
     "objcopy",
-    "--bin", "hello-f072",
+    "--bin", "vintage",
     "--release",
     "--",
     "-O", "binary",
-    "target/thumbv6m-none-eabi/release/hello-f072.bin"
+    "target/thumbv6m-none-eabi/release/vintage.bin"
 ]
 
 [tasks.dfu]
@@ -16,7 +16,7 @@ args = [
     "-d", "0483:df11",
     "-a", "0",
     "-s", "0x08000000:leave",
-    "-D", "target/thumbv6m-none-eabi/release/hello-f072.bin"
+    "-D", "target/thumbv6m-none-eabi/release/vintage.bin"
 ]
 dependencies = ["objcopy"]
 
@@ -24,5 +24,5 @@ dependencies = ["objcopy"]
 command = "openocd"
 args = [
     "-f", "openocd.cfg",
-    "-c", "program target/thumbv6m-none-eabi/release/hello-f072 reset"
+    "-c", "program target/thumbv6m-none-eabi/release/vintage reset"
 ]

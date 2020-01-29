@@ -9,9 +9,10 @@ stm32f0xx-hal = { version = "0.15.2", features = [ "stm32f072", "rt" ] }
 cortex-m = "0.6"
 cortex-m-rt = "0.6"
 stm32-usbd = { version = "0.4.0", features = ["stm32f072xx", "dp_pull_up_support"] }
-panic-reset = "0.1"
+panic-persist = "0.2.1"
 usb-device = "0.2.1"
 usbd-serial = "0.1"
+embedded-hal = "0.2.3"
 
 [dependencies.adafruit-seesaw]
 version = "0.1"
