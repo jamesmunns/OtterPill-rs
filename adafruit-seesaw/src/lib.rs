@@ -17,11 +17,13 @@ pub struct SeeSaw<I2C, DELAY> {
     pub address: u8,
 }
 
+#[derive(Debug)]
 pub enum Error {
     I2c,
     SeeSaw(SeeSawError),
 }
 
+#[derive(Debug)]
 pub enum SeeSawError {
     SizeError,
     InvalidArgument,
@@ -30,7 +32,7 @@ pub enum SeeSawError {
 
 const BUFFER_MAX: usize = 32;
 const PAYLOAD_MAX: usize = BUFFER_MAX - 2;
-const DEFAULT_DELAY_US: u32 = 5_000; // 5ms
+const DEFAULT_DELAY_US: u32 = 125;
 
 impl<I2C, DELAY> SeeSaw<I2C, DELAY>
 where
@@ -48,10 +50,16 @@ where
 
         tx_buf[0] = base;
         tx_buf[1] = function;
+        tx_buf[2..end].copy_from_slice(buf);
 
-        self.i2c
+        let x = self.i2c
             .write(self.address, &tx_buf[..end])
-            .map_err(|_| Error::I2c)
+            .map_err(|_| Error::I2c);
+
+        // AJM HACK
+        self.delay.delay_us(1000);
+
+        x
     }
 
     fn read(&mut self, base: u8, function: u8, delay_us: u32, buf: &mut [u8]) -> Result<(), Error> {
@@ -103,7 +111,7 @@ where
     ///
     /// Additionally theres some shenanigans to convert the raw bufer to (key + event)
     pub fn keypad_read_raw(&mut self, buf: &mut [u8]) -> Result<(), Error> {
-        self.read(keypad::BASE, keypad::functions::FIFO, DEFAULT_DELAY_US, buf)
+        self.read(keypad::BASE, keypad::functions::FIFO, 1000, buf)
     }
 
     pub fn neopixel_set_pin(&mut self, pin: u8) -> Result<(), Error> {
@@ -123,7 +131,7 @@ where
             return Err(Error::SeeSaw(SeeSawError::InvalidArgument));
         }
 
-        let bytes = len.to_be_bytes();
+        let bytes: [u8; 2] = len.to_be_bytes();
         self.write(neopixel::BASE, neopixel::functions::BUF_LENGTH, &bytes)
     }
 
@@ -149,7 +157,7 @@ where
     }
 
     pub fn neopixel_show(&mut self) -> Result<(), Error> {
-        self.write(neopixel::BASE, neopixel::functions::SHOW, &[1])
+        self.write(neopixel::BASE, neopixel::functions::SHOW, &[])
     }
 
     pub fn neopixel_write_buf_raw(&mut self, idx: u16, buf: &[u8]) -> Result<(), Error> {
@@ -166,6 +174,49 @@ where
 
         self.write(neopixel::BASE, neopixel::functions::BUF, &tx_buf[..tx_buf_len])
     }
+
+    pub fn status_get_hwid(&mut self) -> Result<u8, Error> {
+        let mut buf = [0u8; 1];
+        self.read(status::BASE, status::functions::HW_ID, DEFAULT_DELAY_US, &mut buf)
+            .map_err(|_| Error::I2c)?;
+        Ok(buf[0])
+    }
+
+    pub fn status_get_version(&mut self) -> Result<u32, Error> {
+        let mut buf = [0u8; 4];
+        self.read(status::BASE, status::functions::VERSION, DEFAULT_DELAY_US, &mut buf)
+            .map_err(|_| Error::I2c)?;
+        Ok(u32::from_be_bytes(buf))
+    }
+
+    pub fn status_get_options(&mut self) -> Result<u32, Error> {
+        let mut buf = [0u8; 4];
+        self.read(status::BASE, status::functions::OPTIONS, DEFAULT_DELAY_US, &mut buf)
+            .map_err(|_| Error::I2c)?;
+        Ok(u32::from_be_bytes(buf))
+    }
+
+    // Get raw temperature. To convert to celcius, divide by (1 << 16)
+    pub fn status_get_temp_raw(&mut self) -> Result<u32, Error> {
+        let mut buf = [0u8; 4];
+        self.read(status::BASE, status::functions::TEMP, 1000, &mut buf)
+            .map_err(|_| Error::I2c)?;
+        Ok(u32::from_be_bytes(buf))
+    }
+}
+
+pub mod status {
+    pub const BASE: u8 = 0x00;
+
+    pub mod functions {
+        pub const HW_ID: u8 = 0x01;
+        pub const VERSION: u8 = 0x02;
+        pub const OPTIONS: u8 = 0x03;
+        pub const TEMP: u8 = 0x04;
+        pub const SWRST: u8 = 0x7F;
+    }
+
+    pub const HW_ID_CODE: u8 = 0x55;
 }
 
 pub mod neopixel {

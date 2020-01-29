@@ -148,6 +148,8 @@ fn main() -> ! {
 
         let mut panic_report_once = false;
         let mut any_input = false;
+        let mut demo_neo: u8 = 0;
+        let mut color: u32 = 0b1001_0010_0100_1001;
 
         'outer: loop {
             //////////////////////////////////////////////////////////////////
@@ -237,15 +239,141 @@ fn main() -> ! {
                             continue 'outer;
                         }
 
-                        if *c == b'n' {
-                            if trellis.neopixel_set_buf_length_bytes(4).is_err() {
-                                println_blocking(&mut serial, "Bad Buf Set");
-                            } else if trellis.neopixel_write_buf_raw(0, &[0xF0, 0xF0, 0xF0, 0xF0]).is_err() {
-                                println_blocking(&mut serial, "Bad Buf Write");
-                            } else if trellis.neopixel_show().is_err() {
-                                println_blocking(&mut serial, "Bad Show")
+                        if *c == b'k' {
+                            for i in 0..16 {
+                                // ???
+                                let key = (((i) / 4) * 8 + ((i) % 4));
+
+                                trellis.keypad_set_event_raw(
+                                    key,
+                                    adafruit_seesaw::keypad::Edge::Rising,
+                                    adafruit_seesaw::keypad::Status::Enable,
+                                ).unwrap();
+
+                                trellis.keypad_set_event_raw(
+                                    key,
+                                    adafruit_seesaw::keypad::Edge::Falling,
+                                    adafruit_seesaw::keypad::Status::Enable,
+                                ).unwrap();
+                            }
+                            println_blocking(&mut serial, "\r\nSet Key Events");
+                            continue 'outer;
+                        }
+
+                        if *c == b'l' {
+                            for i in 0..16 {
+                                // ???
+                                let key = (((i) / 4) * 8 + ((i) % 4));
+
+                                trellis.keypad_set_event_raw(
+                                    key,
+                                    adafruit_seesaw::keypad::Edge::Rising,
+                                    adafruit_seesaw::keypad::Status::Disable,
+                                ).unwrap();
+
+                                trellis.keypad_set_event_raw(
+                                    key,
+                                    adafruit_seesaw::keypad::Edge::Falling,
+                                    adafruit_seesaw::keypad::Status::Disable,
+                                ).unwrap();
+                            }
+                            println_blocking(&mut serial, "\r\nUnset Key Events");
+                            continue 'outer;
+                        }
+
+                        if *c == b'r' {
+                            if let Ok(i) = trellis.keypad_get_count() {
+                                let mut buf = [0u8; 32];
+
+                                let evts = &mut buf[..(i as usize)];
+
+                                if trellis.keypad_read_raw(evts).is_ok() {
+                                    string_buf.clear();
+                                    write!(&mut string_buf, "Events: ").ok();
+
+                                    for e in evts {
+                                        write!(&mut string_buf, "{:02X} ", e).ok();
+                                    }
+                                    println_blocking(&mut serial, &string_buf);
+                                }
+
                             } else {
-                                println_blocking(&mut serial, "Neopixel set!");
+                                println_blocking(&mut serial, "\r\nNo Events");
+                            }
+                        }
+
+                        if *c == b's' {
+                            type SResult<T> = Result<T, adafruit_seesaw::Error>;
+
+                            #[derive(Debug)]
+                            struct Status {
+                                hw_id: SResult<u8>,
+                                version: SResult<u32>,
+                                options: SResult<u32>,
+                                temp_raw: SResult<u32>,
+                            }
+
+                            println_blocking(&mut serial, "");
+                            string_buf.clear();
+
+                            let hw_id = trellis.status_get_hwid();
+                            let version = trellis.status_get_version();
+                            let options = trellis.status_get_options();
+                            let temp_raw = trellis.status_get_temp_raw();
+
+                            let status = Status {
+                                hw_id,
+                                version,
+                                options,
+                                temp_raw,
+                            };
+
+                            let res = write!(
+                                &mut string_buf,
+                                "{:08X?}",
+                                status
+                            );
+
+                            if res.is_ok() {
+                                println_blocking(&mut serial, &string_buf);
+                            } else {
+                                println_blocking(&mut serial, "Format error");
+                            }
+
+                            continue 'outer;
+                        }
+
+                        if *c == b'm' {
+                            println_blocking(&mut serial, "");
+                            demo_neo += 1;
+                            if demo_neo >= 16 {
+                                demo_neo = 0;
+                            }
+
+                            let colors = color.to_le_bytes();
+
+                            trellis.neopixel_write_buf_raw(
+                                (demo_neo as u16) * 3,
+                                &[colors[0], colors[1], colors[2]]
+                            ).unwrap();
+                            trellis.neopixel_show().unwrap();
+
+                            color = color.rotate_left(1);
+
+
+                        }
+
+                        if *c == b'n' {
+                            println_blocking(&mut serial, "");
+
+                            if trellis.neopixel_set_speed(adafruit_seesaw::neopixel::Speed::Khz800).is_err() {
+                                println_blocking(&mut serial, "Bad Speed");
+                            } else if trellis.neopixel_set_buf_length_bytes(3 * 16).is_err() {
+                                println_blocking(&mut serial, "Bad Buf Set");
+                            } else if trellis.neopixel_set_pin(3).is_err() {
+                                println_blocking(&mut serial, "Bad Pin Set");
+                            } else {
+                                println_blocking(&mut serial, "Neopixel init!");
                             }
 
                             continue 'outer;
