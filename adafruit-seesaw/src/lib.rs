@@ -52,14 +52,9 @@ where
         tx_buf[1] = function;
         tx_buf[2..end].copy_from_slice(buf);
 
-        let x = self.i2c
+        self.i2c
             .write(self.address, &tx_buf[..end])
-            .map_err(|_| Error::I2c);
-
-        // AJM HACK
-        self.delay.delay_us(1000);
-
-        x
+            .map_err(|_| Error::I2c)
     }
 
     fn read(&mut self, base: u8, function: u8, delay_us: u32, buf: &mut [u8]) -> Result<(), Error> {
@@ -68,13 +63,13 @@ where
         self.i2c.read(self.address, buf).map_err(|_| Error::I2c)
     }
 
-    /// Get the count of keys on the keypad
+    /// Get the count of pending key events on the keypad
     pub fn keypad_get_count(&mut self) -> Result<u8, Error> {
         let mut buf = [0u8; 1];
         self.read(
             keypad::BASE,
             keypad::functions::COUNT,
-            DEFAULT_DELAY_US,
+            500,
             &mut buf,
         )?;
         Ok(buf[0])
@@ -203,6 +198,10 @@ where
             .map_err(|_| Error::I2c)?;
         Ok(u32::from_be_bytes(buf))
     }
+
+    pub fn delay_us(&mut self, us: u32) {
+        self.delay.delay_us(us);
+    }
 }
 
 pub mod status {
@@ -237,6 +236,7 @@ pub mod neopixel {
     pub const MAX_RGB_WRITE_PIXELS: usize = MAX_BUF_WRITE_BYTES / 3;
     pub const MAX_RGBW_WRITE_PIXELS: usize = MAX_BUF_WRITE_BYTES / 4;
 
+    #[derive(Debug, Copy, Clone)]
     pub enum ColorOrder {
         RGB,
         GRB,
@@ -244,6 +244,7 @@ pub mod neopixel {
         GRBW,
     }
 
+    #[derive(Debug, Copy, Clone)]
     #[repr(u8)]
     pub enum Speed {
         Khz400 = 0x00,
@@ -263,11 +264,13 @@ pub mod keypad {
         pub const FIFO: u8 = 0x10;
     }
 
+    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     pub struct KeyEvent {
         pub key: u8,
         pub event: Edge,
     }
 
+    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     #[repr(u8)]
     pub enum Edge {
         /// Indicates that the key is currently pressed
@@ -276,11 +279,23 @@ pub mod keypad {
         /// Indicates that the key is currently released
         Low = 0x01,
 
-        /// Indicates that the key was recently pressed
+        /// Indicates that the key was recently released
         Falling = 0x02,
 
-        /// Indicates that the key was recently released
+        /// Indicates that the key was recently pressed
         Rising = 0x03,
+    }
+
+    impl Edge {
+        pub fn from_u8(val: u8) -> Result<Self, crate::Error> {
+            match val {
+                0 => Ok(Edge::High),
+                1 => Ok(Edge::Low),
+                2 => Ok(Edge::Falling),
+                3 => Ok(Edge::Rising),
+                _ => Err(crate::Error::SeeSaw(crate::SeeSawError::InvalidArgument)),
+            }
+        }
     }
 
     #[repr(u8)]

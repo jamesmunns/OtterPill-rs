@@ -14,6 +14,7 @@ use embedded_hal::blocking::{
     i2c::{WriteRead, Write},
     delay::DelayUs,
 };
+use adafruit_neotrellis as neotrellis;
 
 enum TogCount {
     On(usize),
@@ -74,72 +75,31 @@ fn main() -> ! {
         //////////////////////////////////////////////////////////////////////
         // Set up USB as a CDC ACM Serial Port
         //////////////////////////////////////////////////////////////////////
-        let usb_bus = UsbBus::new(usb, (usb_dm, usb_dp));
+        // let usb_bus = UsbBus::new(usb, (usb_dm, usb_dp));
 
 
-        let mut serial = SerialPort::new(&usb_bus);
+        // let mut serial = SerialPort::new(&usb_bus);
 
 
-        let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27DD))
-            .manufacturer("Fake company")
-            .product("Serial port")
-            .serial_number("TEST")
-            .device_class(USB_CLASS_CDC)
-            .build();
+        // let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27DD))
+        //     .manufacturer("Fake company")
+        //     .product("Serial port")
+        //     .serial_number("TEST")
+        //     .device_class(USB_CLASS_CDC)
+        //     .build();
 
         // Force
-        usb_dev.bus().force_reenumeration(|| {
-            delay.delay_us(1_000_000u32);
-        });
+        // usb_dev.bus().force_reenumeration(|| {
+        //     delay.delay_us(1_000_000u32);
+        // });
 
         let mut tog = TogCount::Off(0);
         led.set_low().ok();
         let mut togs = 0;
 
 
-        let mut trellis = seesaw::SeeSaw {
-            i2c,
-            delay,
-            address: 0x2E // TODO: FIXME
-        };
+        let mut trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
 
-        // for _ in 0..2 {
-        //     // Turn PA1 on ten million times in a row
-        //     for _ in 0..1_800_000 {
-        //         led.set_high().ok();
-        //     }
-        //     // Then turn PA1 off a million times in a row
-        //     for _ in 0..2_400_000 {
-        //         led.set_low().ok();
-        //     }
-        // }
-
-
-        // if let Ok(i) = trellis.keypad_get_count() {
-        //     for _ in 0..(i as usize) {
-        //         // Turn PA1 on ten million times in a row
-        //         for _ in 0..180_000 {
-        //             led.set_high().ok();
-        //         }
-        //         // Then turn PA1 off a million times in a row
-        //         for _ in 0..240_000 {
-        //             led.set_low().ok();
-        //         }
-        //     }
-        // } else {
-        //     for _ in 0..3 {
-        //         // Turn PA1 on ten million times in a row
-        //         for _ in 0..1_800_000 {
-        //             led.set_high().ok();
-        //         }
-        //         // Then turn PA1 off a million times in a row
-        //         for _ in 0..2_400_000 {
-        //             led.set_low().ok();
-        //         }
-        //     }
-        // }
-
-        // panic!();
         use heapless::String;
         use heapless::consts::*;
         use core::fmt::Write;
@@ -151,249 +111,138 @@ fn main() -> ! {
         let mut demo_neo: u8 = 0;
         let mut color: u32 = 0b1001_0010_0100_1001;
 
+        trellis
+            .neopixels()
+            .set_speed(neotrellis::Speed::Khz800).unwrap()
+            .set_pixel_count(16).unwrap()
+            .set_pixel_type(neotrellis::ColorOrder::GRB).unwrap()
+            .set_pin(3).unwrap();
+
+        for c in 0..4 {
+            let cols = match c {
+                0 => [0x00, 0x10, 0x00],
+                1 => [0x10, 0x00, 0x00],
+                2 => [0x00, 0x00, 0x10],
+                _ => [0x00, 0x00, 0x00],
+            };
+
+            for i in 0..16 {
+                trellis
+                    .keypad()
+                    .enable_key_event(i, neotrellis::Edge::Rising).unwrap()
+                    .enable_key_event(i, neotrellis::Edge::Falling).unwrap();
+
+                trellis
+                    .neopixels()
+                    .set_pixel_rgb(i, cols[1], cols[0], cols[2])
+                    .unwrap();
+            }
+
+            trellis.neopixels().show().unwrap();
+
+            led.set_high().ok();
+            trellis.seesaw().delay_us(150_000u32);
+            led.set_low().ok();
+            trellis.seesaw().delay_us(150_000u32);
+        }
+
+        let mut sticky = [false; 16];
+
+
         'outer: loop {
+
             //////////////////////////////////////////////////////////////////
             // If the USB port is idle, blink to show we are bored
             //////////////////////////////////////////////////////////////////
-            if !usb_dev.poll(&mut [&mut serial]) {
-                use TogCount::*;
-                tog = match tog {
-                    Off(n) if n >= 200_000 => {
-                        led.set_high().ok();
-                        togs += 1;
-                        On(0)
-                    }
-                    On(n) if n >= 200_000 => {
-                        led.set_low().ok();
-                        togs += 1;
-                        Off(0)
-                    }
-                    On(n) => On(n + 1),
-                    Off(n) => Off(n + 1),
-                };
+            // if !usb_dev.poll(&mut [&mut serial]) {
+            //     use TogCount::*;
+            //     tog = match tog {
+            //         Off(n) if n >= 200_000 => {
+            //             led.set_high().ok();
+            //             togs += 1;
+            //             On(0)
+            //         }
+            //         On(n) if n >= 200_000 => {
+            //             led.set_low().ok();
+            //             togs += 1;
+            //             Off(0)
+            //         }
+            //         On(n) => On(n + 1),
+            //         Off(n) => Off(n + 1),
+            //     };
 
-                //////////////////////////////////////////////////////////////
-                // After a while, just crash and reboot so we can press the
-                // DFU button on reboot
-                //////////////////////////////////////////////////////////////
-                if !any_input && (togs >= 10) {
-                    panic!("Input Timeout");
+            //     //////////////////////////////////////////////////////////////
+            //     // After a while, just crash and reboot so we can press the
+            //     // DFU button on reboot
+            //     //////////////////////////////////////////////////////////////
+            //     if !any_input && (togs >= 10) {
+            //         panic!("Input Timeout");
+            //     }
+            // } else {
+            //     //////////////////////////////////////////////////////////////
+            //     // When active, reset the idle counter
+            //     //////////////////////////////////////////////////////////////
+            //     tog = TogCount::Off(0);
+            //     led.set_low().ok();
+            // }
+
+            // let mut buf = [0u8; 64];
+
+            //////////////////////////////////////////////////////////////////
+            // Process button presses
+            //////////////////////////////////////////////////////////////////
+
+            led.set_high().ok();
+            trellis.seesaw().delay_us(10_000u32);
+            led.set_low().ok();
+            trellis.seesaw().delay_us(10_000u32);
+
+
+            for evt in trellis.keypad().get_events().unwrap().as_slice() {
+                if evt.key == 15 && evt.event == neotrellis::Edge::Falling {
+                    panic!()
                 }
 
-                continue;
-            } else {
-                //////////////////////////////////////////////////////////////
-                // When active, reset the idle counter
-                //////////////////////////////////////////////////////////////
-                tog = TogCount::Off(0);
-                led.set_low().ok();
+                if evt.event == neotrellis::Edge::Rising {
+
+                    if sticky[evt.key as usize] {
+                        trellis.neopixels().set_pixel_rgb(evt.key, 0, 0, 0).unwrap();
+                        sticky[evt.key as usize] = false;
+                    } else {
+                        let colors = color.to_le_bytes();
+
+                        trellis.neopixels().set_pixel_rgb(evt.key, colors[1], colors[0], colors[2]).unwrap();
+
+                        color = color.rotate_left(1);
+                        sticky[(evt.key as usize)] = true;
+                    }
+                }
             }
 
-            let mut buf = [0u8; 64];
+            trellis.neopixels().show().unwrap();
 
             //////////////////////////////////////////////////////////////////
             // Loopback as upper case, use 'z' to force a reboot of the device
             //////////////////////////////////////////////////////////////////
-            match serial.read(&mut buf) {
-                Ok(count) if count > 0 => {
-                    led.set_high().ok(); // Turn on
-                    any_input = true;
+            // match serial.read(&mut buf) {
+            //     Ok(count) if count > 0 => {
+            //         any_input = true;
 
+            //         for c in buf[0..count].iter_mut() {
+            //             if *c == b'z' {
+            //                 panic!("reset requested");
+            //             }
 
-                    // Echo back in upper case
-                    for c in buf[0..count].iter_mut() {
-                        if *c == b'z' {
-                            panic!("reset requested");
-                        }
+            //             if b'a' <= *c && *c <= b'z' {
+            //                 *c &= !0x20;
+            //             }
+            //         }
+            //         print_blocking_bytes(&mut serial, &buf);
+            //     }
+            //     _ => {}
+            // }
 
-                        if !panic_report_once && *c == b'p' {
-                            panic_report_once = true;
-
-                            println_blocking(&mut serial, "");
-
-                            if let Some(msg_b) = get_panic_message_bytes() {
-                                println_blocking_bytes(&mut serial, msg_b);
-                            } else {
-                                println_blocking(&mut serial, "No Panic.");
-                            }
-
-                            continue 'outer;
-                        }
-
-                        if *c == b't' {
-                            println_blocking(&mut serial, "");
-
-                            if let Ok(i) = trellis.keypad_get_count() {
-                                println_blocking(&mut serial, "Good Trellis.");
-
-                                string_buf.clear();
-
-                                if let Ok(_) = write!(&mut string_buf, "{} buttons", i) {
-                                    println_blocking(&mut serial, &string_buf);
-                                }
-
-                            } else {
-                                println_blocking(&mut serial, "Bad Trellis.");
-                            }
-
-                            continue 'outer;
-                        }
-
-                        if *c == b'k' {
-                            for i in 0..16 {
-                                // ???
-                                let key = (((i) / 4) * 8 + ((i) % 4));
-
-                                trellis.keypad_set_event_raw(
-                                    key,
-                                    adafruit_seesaw::keypad::Edge::Rising,
-                                    adafruit_seesaw::keypad::Status::Enable,
-                                ).unwrap();
-
-                                trellis.keypad_set_event_raw(
-                                    key,
-                                    adafruit_seesaw::keypad::Edge::Falling,
-                                    adafruit_seesaw::keypad::Status::Enable,
-                                ).unwrap();
-                            }
-                            println_blocking(&mut serial, "\r\nSet Key Events");
-                            continue 'outer;
-                        }
-
-                        if *c == b'l' {
-                            for i in 0..16 {
-                                // ???
-                                let key = (((i) / 4) * 8 + ((i) % 4));
-
-                                trellis.keypad_set_event_raw(
-                                    key,
-                                    adafruit_seesaw::keypad::Edge::Rising,
-                                    adafruit_seesaw::keypad::Status::Disable,
-                                ).unwrap();
-
-                                trellis.keypad_set_event_raw(
-                                    key,
-                                    adafruit_seesaw::keypad::Edge::Falling,
-                                    adafruit_seesaw::keypad::Status::Disable,
-                                ).unwrap();
-                            }
-                            println_blocking(&mut serial, "\r\nUnset Key Events");
-                            continue 'outer;
-                        }
-
-                        if *c == b'r' {
-                            if let Ok(i) = trellis.keypad_get_count() {
-                                let mut buf = [0u8; 32];
-
-                                let evts = &mut buf[..(i as usize)];
-
-                                if trellis.keypad_read_raw(evts).is_ok() {
-                                    string_buf.clear();
-                                    write!(&mut string_buf, "Events: ").ok();
-
-                                    for e in evts {
-                                        let event = *e & 0b0000_0011;
-                                        let key = *e >> 2;
-                                        let key = (((key) / 8) * 4 + ((key) % 8));
-
-                                        write!(&mut string_buf, "(k: {}, e: {}) ", key, event).ok();
-                                    }
-                                    println_blocking(&mut serial, &string_buf);
-                                }
-
-                            } else {
-                                println_blocking(&mut serial, "\r\nNo Events");
-                            }
-                        }
-
-                        if *c == b's' {
-                            type SResult<T> = Result<T, adafruit_seesaw::Error>;
-
-                            #[derive(Debug)]
-                            struct Status {
-                                hw_id: SResult<u8>,
-                                version: SResult<u32>,
-                                options: SResult<u32>,
-                                temp_raw: SResult<u32>,
-                            }
-
-                            println_blocking(&mut serial, "");
-                            string_buf.clear();
-
-                            let hw_id = trellis.status_get_hwid();
-                            let version = trellis.status_get_version();
-                            let options = trellis.status_get_options();
-                            let temp_raw = trellis.status_get_temp_raw();
-
-                            let status = Status {
-                                hw_id,
-                                version,
-                                options,
-                                temp_raw,
-                            };
-
-                            let res = write!(
-                                &mut string_buf,
-                                "{:08X?}",
-                                status
-                            );
-
-                            if res.is_ok() {
-                                println_blocking(&mut serial, &string_buf);
-                            } else {
-                                println_blocking(&mut serial, "Format error");
-                            }
-
-                            continue 'outer;
-                        }
-
-                        if *c == b'm' {
-                            println_blocking(&mut serial, "");
-                            demo_neo += 1;
-                            if demo_neo >= 16 {
-                                demo_neo = 0;
-                            }
-
-                            let colors = color.to_le_bytes();
-
-                            trellis.neopixel_write_buf_raw(
-                                (demo_neo as u16) * 3,
-                                &[colors[0], colors[1], colors[2]]
-                            ).unwrap();
-                            trellis.neopixel_show().unwrap();
-
-                            color = color.rotate_left(1);
-
-
-                        }
-
-                        if *c == b'n' {
-                            println_blocking(&mut serial, "");
-
-                            if trellis.neopixel_set_speed(adafruit_seesaw::neopixel::Speed::Khz800).is_err() {
-                                println_blocking(&mut serial, "Bad Speed");
-                            } else if trellis.neopixel_set_buf_length_bytes(3 * 16).is_err() {
-                                println_blocking(&mut serial, "Bad Buf Set");
-                            } else if trellis.neopixel_set_pin(3).is_err() {
-                                println_blocking(&mut serial, "Bad Pin Set");
-                            } else {
-                                println_blocking(&mut serial, "Neopixel init!");
-                            }
-
-                            continue 'outer;
-                        }
-
-                        if b'a' <= *c && *c <= b'z' {
-                            *c &= !0x20;
-                        }
-                    }
-
-                    print_blocking_bytes(&mut serial, &buf);
-                }
-                _ => {}
-            }
-
-            led.set_low().ok(); // Turn off
+            // led.set_low().ok(); // Turn off
         }
     }
 

@@ -19,6 +19,10 @@ heapless = "0.5"
 version = "0.1"
 path = "../adafruit-seesaw"
 
+[dependencies.adafruit-neotrellis]
+version = "0.1"
+path = "../adafruit-neotrellis"
+
 [profile.release]
 lto             = true
 panic           = "abort"
