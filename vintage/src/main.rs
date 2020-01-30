@@ -7,7 +7,6 @@ use adafruit_neotrellis::{self as neotrellis, NeoTrellis};
 use embedded_hal::digital::v2::OutputPin;
 use rtfm::app;
 use stm32_usbd::UsbBus;
-use stm32f0xx_hal::prelude::*;
 use stm32f0xx_hal::{
     delay::Delay,
     gpio::{
@@ -17,9 +16,12 @@ use stm32f0xx_hal::{
     i2c::I2c,
     stm32f0::stm32f0x2::I2C1,
     usb::Peripheral,
+    prelude::*
 };
-use usb_device::bus::{self, UsbBusAllocator};
-use usb_device::prelude::*;
+use usb_device::{
+    bus::{self, UsbBusAllocator},
+    prelude::*,
+};
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
 
 #[app(device = stm32f0xx_hal::stm32, peripherals = true)]
@@ -64,6 +66,11 @@ const APP: () = {
             let usb_dm = gpioa.pa11;
             let usb_dp = gpioa.pa12;
 
+            let mut usb_dp = usb_dp.into_push_pull_output(&cs);
+            usb_dp.set_low().ok();
+            cortex_m::asm::delay(48_000_000 / 100);
+            let usb_dp = usb_dp.into_floating_input(&cs);
+
             let scl = gpiob.pb6.into_alternate_af1(&cs);
             let sda = gpiob.pb7.into_alternate_af1(&cs);
 
@@ -105,9 +112,9 @@ const APP: () = {
             pin_dp: usb_dp,
         }));
 
-        let serial = SerialPort::new(USB_BUS.as_ref().unwrap());
+        let mut serial = SerialPort::new(USB_BUS.as_ref().unwrap());
 
-        let usb_dev = UsbDeviceBuilder::new(USB_BUS.as_ref().unwrap(), UsbVidPid(0x16c0, 0x27DD))
+        let mut usb_dev = UsbDeviceBuilder::new(USB_BUS.as_ref().unwrap(), UsbVidPid(0x16c0, 0x27DD))
             .manufacturer("Fake company")
             .product("Serial port")
             .serial_number("TEST")
@@ -115,6 +122,8 @@ const APP: () = {
             .build();
 
         let trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
+
+        usb_dev.poll(&mut [&mut serial]);
 
         init::LateResources {
             usb_dev,
