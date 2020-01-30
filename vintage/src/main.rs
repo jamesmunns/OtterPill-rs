@@ -132,100 +132,97 @@ const APP: () = {
     }
 
     #[idle(resources = [trellis])]
-    fn idle(cx: idle::Context) -> ! {
-        let mut color: u32 = 0b1001_0010_0100_1001;
-
-        cx.resources
-            .trellis
-            .neopixels()
-            .set_speed(neotrellis::Speed::Khz800)
-            .unwrap()
-            .set_pixel_count(16)
-            .unwrap()
-            .set_pixel_type(neotrellis::ColorOrder::GRB)
-            .unwrap()
-            .set_pin(3)
-            .unwrap();
-
-        for c in 0..4 {
-            let cols = match c {
-                0 => [0x00, 0x10, 0x00],
-                1 => [0x10, 0x00, 0x00],
-                2 => [0x00, 0x00, 0x10],
-                _ => [0x00, 0x00, 0x00],
-            };
-
-            for i in 0..16 {
-                cx.resources
-                    .trellis
-                    .keypad()
-                    .enable_key_event(i, neotrellis::Edge::Rising)
-                    .unwrap()
-                    .enable_key_event(i, neotrellis::Edge::Falling)
-                    .unwrap();
-
-                cx.resources
-                    .trellis
-                    .neopixels()
-                    .set_pixel_rgb(i, cols[1], cols[0], cols[2])
-                    .unwrap();
-            }
-
-            cx.resources.trellis.neopixels().show().unwrap();
-            cx.resources.trellis.seesaw().delay_us(150_000u32);
-        }
-
-        let mut sticky = [false; 16];
-
-        'outer: loop {
-            // let mut buf = [0u8; 64];
-
-            //////////////////////////////////////////////////////////////////
-            // Process button presses
-            //////////////////////////////////////////////////////////////////
-
-            cx.resources.trellis.seesaw().delay_us(10_000u32);
-            cx.resources.trellis.seesaw().delay_us(10_000u32);
-
-            for evt in cx
-                .resources
-                .trellis
-                .keypad()
-                .get_events()
-                .unwrap()
-                .as_slice()
-            {
-                if evt.key == 15 && evt.event == neotrellis::Edge::Falling {
-                    panic!()
-                }
-
-                if evt.event == neotrellis::Edge::Rising {
-                    if sticky[evt.key as usize] {
-                        cx.resources
-                            .trellis
-                            .neopixels()
-                            .set_pixel_rgb(evt.key, 0, 0, 0)
-                            .unwrap();
-                        sticky[evt.key as usize] = false;
-                    } else {
-                        let colors = color.to_le_bytes();
-
-                        cx.resources
-                            .trellis
-                            .neopixels()
-                            .set_pixel_rgb(evt.key, colors[1], colors[0], colors[2])
-                            .unwrap();
-
-                        color = color.rotate_left(1);
-                        sticky[(evt.key as usize)] = true;
-                    }
-                }
-            }
-
-            cx.resources.trellis.neopixels().show().unwrap();
-        }
+    fn idle(mut cx: idle::Context) -> ! {
+        match inner_idle(&mut cx) {
+            Ok(_) => loop { continue; },
+            Err(_) => panic!(),
+        };
     }
 };
+
+fn inner_idle(cx: &mut idle::Context) -> Result<(), neotrellis::Error> {
+    let mut color: u32 = 0b1001_0010_0100_1001;
+
+    cx.resources
+        .trellis
+        .neopixels()
+        .set_speed(neotrellis::Speed::Khz800)?
+        .set_pixel_count(16)?
+        .set_pixel_type(neotrellis::ColorOrder::GRB)?
+        .set_pin(3)?;
+
+    for c in 0..4 {
+        let cols = match c {
+            0 => [0x00, 0x10, 0x00],
+            1 => [0x10, 0x00, 0x00],
+            2 => [0x00, 0x00, 0x10],
+            _ => [0x00, 0x00, 0x00],
+        };
+
+        for i in 0..16 {
+            cx.resources
+                .trellis
+                .keypad()
+                .enable_key_event(i, neotrellis::Edge::Rising)?
+                .enable_key_event(i, neotrellis::Edge::Falling)?;
+
+            cx.resources
+                .trellis
+                .neopixels()
+                .set_pixel_rgb(i, cols[1], cols[0], cols[2])?;
+        }
+
+        cx.resources.trellis.neopixels().show()?;
+        cx.resources.trellis.seesaw().delay_us(150_000u32);
+    }
+
+    let mut sticky = [false; 16];
+
+    'outer: loop {
+        // let mut buf = [0u8; 64];
+
+        //////////////////////////////////////////////////////////////////
+        // Process button presses
+        //////////////////////////////////////////////////////////////////
+
+        cx.resources.trellis.seesaw().delay_us(10_000u32);
+        cx.resources.trellis.seesaw().delay_us(10_000u32);
+
+        for evt in cx
+            .resources
+            .trellis
+            .keypad()
+            .get_events()?
+            .as_slice()
+        {
+            if evt.key == 15 && evt.event == neotrellis::Edge::Falling {
+                panic!()
+            }
+
+            if evt.event == neotrellis::Edge::Rising {
+                if sticky[evt.key as usize] {
+                    cx.resources
+                        .trellis
+                        .neopixels()
+                        .set_pixel_rgb(evt.key, 0, 0, 0)?;
+                    sticky[evt.key as usize] = false;
+                } else {
+                    let colors = color.to_le_bytes();
+
+                    cx.resources
+                        .trellis
+                        .neopixels()
+                        .set_pixel_rgb(evt.key, colors[1], colors[0], colors[2])?;
+
+                    color = color.rotate_left(1);
+                    sticky[(evt.key as usize)] = true;
+                }
+            }
+        }
+
+        cx.resources.trellis.neopixels().show()?;
+    }
+}
 
 fn usb_poll<B: bus::UsbBus>(
     usb_dev: &mut UsbDevice<'static, B>,
