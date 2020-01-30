@@ -1,36 +1,55 @@
 #![no_main]
 #![no_std]
 
-use crate::hal::{prelude::*, stm32, i2c::I2c, delay::Delay};
-use cortex_m_rt::entry;
-use panic_persist::{self as _, get_panic_message_bytes};
+use panic_persist as _;
+
+use adafruit_neotrellis::{self as neotrellis, NeoTrellis};
+use embedded_hal::digital::v2::OutputPin;
+use rtfm::app;
 use stm32_usbd::UsbBus;
-use stm32f0xx_hal as hal;
+use stm32f0xx_hal::prelude::*;
+use stm32f0xx_hal::{
+    delay::Delay,
+    gpio::{
+        gpiob::{PB13, PB6, PB7},
+        Alternate, PushPull, AF1,
+    },
+    i2c::I2c,
+    stm32f0::stm32f0x2::I2C1,
+    usb::Peripheral,
+};
+use usb_device::bus::{self, UsbBusAllocator};
 use usb_device::prelude::*;
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
-use adafruit_seesaw as seesaw;
-use cortex_m;
-use embedded_hal::blocking::{
-    i2c::{WriteRead, Write},
-    delay::DelayUs,
-};
-use adafruit_neotrellis as neotrellis;
 
-enum TogCount {
-    On(usize),
-    Off(usize),
-}
+#[app(device = stm32f0xx_hal::stm32, peripherals = true)]
+const APP: () = {
+    struct Resources {
+        usb_dev: UsbDevice<'static, UsbBus<Peripheral>>,
+        serial: SerialPort<'static, UsbBus<Peripheral>>,
+        led: PB13<stm32f0xx_hal::gpio::Output<PushPull>>,
+        trellis: NeoTrellis<I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>, Delay>,
+    }
 
-#[entry]
-fn main() -> ! {
-    if let (Some(p), Some(cp)) = (stm32::Peripherals::take(), cortex_m::Peripherals::take()) {
+    #[init]
+    fn init(cx: init::Context) -> init::LateResources {
+        static mut USB_BUS: Option<UsbBusAllocator<UsbBus<Peripheral>>> = None;
+
         //////////////////////////////////////////////////////////////////////
         // Set up the hardware!
         //////////////////////////////////////////////////////////////////////
-        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1) =
-            (p.USB, p.RCC, p.CRS, p.FLASH, p.GPIOA, p.GPIOB, p.I2C1);
+        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1, syst) = (
+            cx.device.USB,
+            cx.device.RCC,
+            cx.device.CRS,
+            cx.device.FLASH,
+            cx.device.GPIOA,
+            cx.device.GPIOB,
+            cx.device.I2C1,
+            cx.core.SYST,
+        );
 
-        let (usb_dm, usb_dp, mut led, i2c, mut delay) = cortex_m::interrupt::free(|cs| {
+        let (usb_dm, usb_dp, mut led, i2c, delay) = cortex_m::interrupt::free(|cs| {
             let mut rcc = rcc
                 .configure()
                 .hsi48()
@@ -50,11 +69,16 @@ fn main() -> ! {
 
             let i2c = I2c::i2c1(i2c1, (scl, sda), 100.khz(), &mut rcc);
 
-            let delay = Delay::new(cp.SYST, &rcc);
+            let delay = Delay::new(syst, &rcc);
 
-            (usb_dm, usb_dp, gpiob.pb13.into_push_pull_output(cs), i2c, delay)
+            (
+                usb_dm,
+                usb_dp,
+                gpiob.pb13.into_push_pull_output(cs),
+                i2c,
+                delay,
+            )
         });
-
 
         //////////////////////////////////////////////////////////////////////
         // Blink a few times to show we've [re]-booted
@@ -72,51 +96,56 @@ fn main() -> ! {
 
         led.set_high().ok();
 
-        //////////////////////////////////////////////////////////////////////
-        // Set up USB as a CDC ACM Serial Port
-        //////////////////////////////////////////////////////////////////////
-        // let usb_bus = UsbBus::new(usb, (usb_dm, usb_dp));
+        // //////////////////////////////////////////////////////////////////////
+        // // Set up USB as a CDC ACM Serial Port
+        // //////////////////////////////////////////////////////////////////////
+        *USB_BUS = Some(UsbBus::new(Peripheral {
+            usb,
+            pin_dm: usb_dm,
+            pin_dp: usb_dp,
+        }));
 
+        let serial = SerialPort::new(USB_BUS.as_ref().unwrap());
 
-        // let mut serial = SerialPort::new(&usb_bus);
+        let usb_dev = UsbDeviceBuilder::new(USB_BUS.as_ref().unwrap(), UsbVidPid(0x16c0, 0x27DD))
+            .manufacturer("Fake company")
+            .product("Serial port")
+            .serial_number("TEST")
+            .device_class(USB_CLASS_CDC)
+            .build();
 
+        let trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
 
-        // let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27DD))
-        //     .manufacturer("Fake company")
-        //     .product("Serial port")
-        //     .serial_number("TEST")
-        //     .device_class(USB_CLASS_CDC)
-        //     .build();
+        init::LateResources {
+            usb_dev,
+            serial,
+            led,
+            trellis,
+        }
+    }
 
-        // Force
-        // usb_dev.bus().force_reenumeration(|| {
-        //     delay.delay_us(1_000_000u32);
-        // });
+    #[task(binds = USB, resources = [usb_dev, serial, led])]
+    fn usb_tx(mut cx: usb_tx::Context) {
+        cx.resources.led.set_high().ok();
+        usb_poll(&mut cx.resources.usb_dev, &mut cx.resources.serial);
+        cx.resources.led.set_low().ok();
+    }
 
-        let mut tog = TogCount::Off(0);
-        led.set_low().ok();
-        let mut togs = 0;
-
-
-        let mut trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
-
-        use heapless::String;
-        use heapless::consts::*;
-        use core::fmt::Write;
-
-        let mut string_buf: String<U1024> = String::new();
-
-        let mut panic_report_once = false;
-        let mut any_input = false;
-        let mut demo_neo: u8 = 0;
+    #[idle(resources = [trellis])]
+    fn idle(cx: idle::Context) -> ! {
         let mut color: u32 = 0b1001_0010_0100_1001;
 
-        trellis
+        cx.resources
+            .trellis
             .neopixels()
-            .set_speed(neotrellis::Speed::Khz800).unwrap()
-            .set_pixel_count(16).unwrap()
-            .set_pixel_type(neotrellis::ColorOrder::GRB).unwrap()
-            .set_pin(3).unwrap();
+            .set_speed(neotrellis::Speed::Khz800)
+            .unwrap()
+            .set_pixel_count(16)
+            .unwrap()
+            .set_pixel_type(neotrellis::ColorOrder::GRB)
+            .unwrap()
+            .set_pin(3)
+            .unwrap();
 
         for c in 0..4 {
             let cols = match c {
@@ -127,91 +156,65 @@ fn main() -> ! {
             };
 
             for i in 0..16 {
-                trellis
+                cx.resources
+                    .trellis
                     .keypad()
-                    .enable_key_event(i, neotrellis::Edge::Rising).unwrap()
-                    .enable_key_event(i, neotrellis::Edge::Falling).unwrap();
+                    .enable_key_event(i, neotrellis::Edge::Rising)
+                    .unwrap()
+                    .enable_key_event(i, neotrellis::Edge::Falling)
+                    .unwrap();
 
-                trellis
+                cx.resources
+                    .trellis
                     .neopixels()
                     .set_pixel_rgb(i, cols[1], cols[0], cols[2])
                     .unwrap();
             }
 
-            trellis.neopixels().show().unwrap();
-
-            led.set_high().ok();
-            trellis.seesaw().delay_us(150_000u32);
-            led.set_low().ok();
-            trellis.seesaw().delay_us(150_000u32);
+            cx.resources.trellis.neopixels().show().unwrap();
+            cx.resources.trellis.seesaw().delay_us(150_000u32);
         }
 
         let mut sticky = [false; 16];
 
-
         'outer: loop {
-
-            //////////////////////////////////////////////////////////////////
-            // If the USB port is idle, blink to show we are bored
-            //////////////////////////////////////////////////////////////////
-            // if !usb_dev.poll(&mut [&mut serial]) {
-            //     use TogCount::*;
-            //     tog = match tog {
-            //         Off(n) if n >= 200_000 => {
-            //             led.set_high().ok();
-            //             togs += 1;
-            //             On(0)
-            //         }
-            //         On(n) if n >= 200_000 => {
-            //             led.set_low().ok();
-            //             togs += 1;
-            //             Off(0)
-            //         }
-            //         On(n) => On(n + 1),
-            //         Off(n) => Off(n + 1),
-            //     };
-
-            //     //////////////////////////////////////////////////////////////
-            //     // After a while, just crash and reboot so we can press the
-            //     // DFU button on reboot
-            //     //////////////////////////////////////////////////////////////
-            //     if !any_input && (togs >= 10) {
-            //         panic!("Input Timeout");
-            //     }
-            // } else {
-            //     //////////////////////////////////////////////////////////////
-            //     // When active, reset the idle counter
-            //     //////////////////////////////////////////////////////////////
-            //     tog = TogCount::Off(0);
-            //     led.set_low().ok();
-            // }
-
             // let mut buf = [0u8; 64];
 
             //////////////////////////////////////////////////////////////////
             // Process button presses
             //////////////////////////////////////////////////////////////////
 
-            led.set_high().ok();
-            trellis.seesaw().delay_us(10_000u32);
-            led.set_low().ok();
-            trellis.seesaw().delay_us(10_000u32);
+            cx.resources.trellis.seesaw().delay_us(10_000u32);
+            cx.resources.trellis.seesaw().delay_us(10_000u32);
 
-
-            for evt in trellis.keypad().get_events().unwrap().as_slice() {
+            for evt in cx
+                .resources
+                .trellis
+                .keypad()
+                .get_events()
+                .unwrap()
+                .as_slice()
+            {
                 if evt.key == 15 && evt.event == neotrellis::Edge::Falling {
                     panic!()
                 }
 
                 if evt.event == neotrellis::Edge::Rising {
-
                     if sticky[evt.key as usize] {
-                        trellis.neopixels().set_pixel_rgb(evt.key, 0, 0, 0).unwrap();
+                        cx.resources
+                            .trellis
+                            .neopixels()
+                            .set_pixel_rgb(evt.key, 0, 0, 0)
+                            .unwrap();
                         sticky[evt.key as usize] = false;
                     } else {
                         let colors = color.to_le_bytes();
 
-                        trellis.neopixels().set_pixel_rgb(evt.key, colors[1], colors[0], colors[2]).unwrap();
+                        cx.resources
+                            .trellis
+                            .neopixels()
+                            .set_pixel_rgb(evt.key, colors[1], colors[0], colors[2])
+                            .unwrap();
 
                         color = color.rotate_left(1);
                         sticky[(evt.key as usize)] = true;
@@ -219,83 +222,34 @@ fn main() -> ! {
                 }
             }
 
-            trellis.neopixels().show().unwrap();
-
-            //////////////////////////////////////////////////////////////////
-            // Loopback as upper case, use 'z' to force a reboot of the device
-            //////////////////////////////////////////////////////////////////
-            // match serial.read(&mut buf) {
-            //     Ok(count) if count > 0 => {
-            //         any_input = true;
-
-            //         for c in buf[0..count].iter_mut() {
-            //             if *c == b'z' {
-            //                 panic!("reset requested");
-            //             }
-
-            //             if b'a' <= *c && *c <= b'z' {
-            //                 *c &= !0x20;
-            //             }
-            //         }
-            //         print_blocking_bytes(&mut serial, &buf);
-            //     }
-            //     _ => {}
-            // }
-
-            // led.set_low().ok(); // Turn off
+            cx.resources.trellis.neopixels().show().unwrap();
         }
     }
+};
 
-    loop {
-        continue;
-    }
-}
+fn usb_poll<B: bus::UsbBus>(
+    usb_dev: &mut UsbDevice<'static, B>,
+    serial: &mut SerialPort<'static, B>,
+) {
+    if usb_dev.poll(&mut [serial]) {
+        let mut buf = [0u8; 8];
 
-use core::borrow::BorrowMut;
+        match serial.read(&mut buf) {
+            Ok(count) if count > 0 => {
+                // Echo back in upper case
+                for c in buf[0..count].iter_mut() {
+                    if *c == b'z' {
+                        panic!();
+                    }
 
-fn print_blocking<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg: &str)
-where
-    B: usb_device::bus::UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
-{
-    print_blocking_bytes(usb, msg.as_bytes())
-}
+                    if 0x61 <= *c && *c <= 0x7a {
+                        *c &= !0x20;
+                    }
+                }
 
-fn println_blocking<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg: &str)
-where
-    B: usb_device::bus::UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
-{
-    println_blocking_bytes(usb, msg.as_bytes())
-}
-
-fn print_blocking_bytes<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg_b: &[u8])
-where
-    B: usb_device::bus::UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
-{
-    let count = msg_b.len();
-    let mut write_offset = 0;
-
-    while write_offset < count {
-        match usb.write(&msg_b[write_offset..count]) {
-            Ok(len) if len > 0 => {
-                write_offset += len;
+                serial.write(&buf[0..count]).ok();
             }
             _ => {}
         }
     }
-}
-
-fn println_blocking_bytes<B, RS, WS>(usb: &mut SerialPort<B, RS, WS>, msg_b: &[u8])
-where
-    B: usb_device::bus::UsbBus,
-    RS: BorrowMut<[u8]>,
-    WS: BorrowMut<[u8]>,
-{
-    print_blocking_bytes(usb, msg_b);
-    print_blocking_bytes(usb, &[b'\r', b'\n']);
 }
