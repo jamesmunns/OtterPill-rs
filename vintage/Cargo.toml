@@ -15,6 +15,11 @@ usbd-serial = "0.1"
 embedded-hal = "0.2.3"
 heapless = "0.5"
 cortex-m-rtfm = "0.5"
+postcard = "0.4.3"
+
+[dependencies.vintage-icd]
+version = "0.1"
+path = "../vintage-icd"
 
 [dependencies.adafruit-seesaw]
 version = "0.1"

@@ -152,6 +152,7 @@ dependencies = [
  "as-slice 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "generic-array 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "hash32 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -174,6 +175,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "cortex-m 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "postcard"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "byteorder 1.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "heapless 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postcard-cobs 0.1.5-pre (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "postcard-cobs"
+version = "0.1.5-pre"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "proc-macro2"
@@ -231,6 +248,24 @@ dependencies = [
 name = "semver-parser"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "serde"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "serde_derive 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "proc-macro2 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "quote 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "syn 1.0.14 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "stable_deref_trait"
@@ -326,10 +361,21 @@ dependencies = [
  "embedded-hal 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "heapless 0.5.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "panic-persist 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postcard 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "stm32-usbd 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "stm32f0xx-hal 0.15.2 (git+https://github.com/stm32-rs/stm32f0xx-hal?rev=b15fc1532f738e06df23935446ce4bfa67b078cc)",
  "usb-device 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "usbd-serial 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vintage-icd 0.1.0",
+]
+
+[[package]]
+name = "vintage-icd"
+version = "0.1.0"
+dependencies = [
+ "generic-array 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postcard 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -365,6 +411,8 @@ dependencies = [
 "checksum indexmap 1.3.1 (registry+https://github.com/rust-lang/crates.io-index)" = "0b54058f0a6ff80b6803da8faf8997cde53872b38f4023728f6830b06cd3c0dc"
 "checksum nb 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "b1411551beb3c11dedfb0a90a0fa256b47d28b9ec2cdff34c25a2fa59e45dbdc"
 "checksum panic-persist 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dd2e692a5954e3eb0c16f5dbaa75c4332a78d85851521f138c04ad95d6f5ee42"
+"checksum postcard 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)" = "f61f42c9617f3d7b447ee300bf80cb16c7cd7b28ca88555822793f073f69719f"
+"checksum postcard-cobs 0.1.5-pre (registry+https://github.com/rust-lang/crates.io-index)" = "7c68cb38ed13fd7bc9dd5db8f165b7c8d9c1a315104083a2b10f11354c2af97f"
 "checksum proc-macro2 1.0.8 (registry+https://github.com/rust-lang/crates.io-index)" = "3acb317c6ff86a4e579dfa00fc5e6cca91ecbb4e7eb2df0468805b674eb88548"
 "checksum quote 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "053a8c8bcc71fcce321828dc897a98ab9760bef03a4fc36693c231e5b3216cfe"
 "checksum r0 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "e2a38df5b15c8d5c7e8654189744d8e396bddc18ad48041a500ce52d6948941f"
@@ -373,6 +421,8 @@ dependencies = [
 "checksum rustc_version 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "138e3e0acb6c9fb258b19b67cb8abd63c00679d2851805ea151465464fe9030a"
 "checksum semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "1d7eb9ef2c18661902cc47e535f9bc51b78acd254da71d375c2f6720d9a40403"
 "checksum semver-parser 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)" = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
+"checksum serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)" = "414115f25f818d7dfccec8ee535d76949ae78584fc4f79a6f45a904bf8ab4449"
+"checksum serde_derive 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)" = "128f9e303a5a29922045a830221b8f78ec74a5f544944f3d5984f8ec3895ef64"
 "checksum stable_deref_trait 1.1.1 (registry+https://github.com/rust-lang/crates.io-index)" = "dba1a27d3efae4351c8051072d619e3ade2820635c3958d826bfea39d59b54c8"
 "checksum stm32-usbd 0.5.0 (registry+https://github.com/rust-lang/crates.io-index)" = "360fa63fdf1b5b0d2ce4a08ecf11aca186b2ecdaff1f6f17c5af1941146a9710"
 "checksum stm32f0 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "c7cda5843380c901c32ea4e65ee7fbfa4017c833676791e05480299c4808bbe0"

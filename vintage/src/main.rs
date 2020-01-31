@@ -23,6 +23,34 @@ use usb_device::{
     prelude::*,
 };
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
+use vintage_icd::{
+    HostToDeviceMessages,
+    DeviceToHostMessages,
+    cobs_buffer::{
+        Buffer,
+        FeedResult,
+        consts::*,
+    }
+};
+use heapless::{
+    spsc::{
+        Queue,
+        Producer,
+        Consumer,
+        SingleCore,
+    },
+};
+use postcard;
+
+pub struct UsbChannels {
+    incoming: Producer<'static, HostToDeviceMessages, U16, u8>,
+    outgoing: Consumer<'static, DeviceToHostMessages, U16, u8>,
+}
+
+pub struct ClientChannels {
+    incoming: Consumer<'static, HostToDeviceMessages, U16, u8>,
+    outgoing: Producer<'static, DeviceToHostMessages, U16, u8>,
+}
 
 #[app(device = stm32f0xx_hal::stm32, peripherals = true)]
 const APP: () = {
@@ -31,11 +59,16 @@ const APP: () = {
         serial: SerialPort<'static, UsbBus<Peripheral>>,
         led: PB13<stm32f0xx_hal::gpio::Output<PushPull>>,
         trellis: NeoTrellis<I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>, Delay>,
+        buffer: Buffer<U256>,
+        usb_chan: UsbChannels,
+        cli_chan: ClientChannels,
     }
 
     #[init]
     fn init(cx: init::Context) -> init::LateResources {
         static mut USB_BUS: Option<UsbBusAllocator<UsbBus<Peripheral>>> = None;
+        static mut HOST_TO_DEVICE: Option<Queue<HostToDeviceMessages, U16, u8>> = None;
+        static mut DEVICE_TO_HOST: Option<Queue<DeviceToHostMessages, U16, u8>> = None;
 
         //////////////////////////////////////////////////////////////////////
         // Set up the hardware!
@@ -103,9 +136,9 @@ const APP: () = {
 
         led.set_high().ok();
 
-        // //////////////////////////////////////////////////////////////////////
-        // // Set up USB as a CDC ACM Serial Port
-        // //////////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////////
+        // Set up USB as a CDC ACM Serial Port
+        //////////////////////////////////////////////////////////////////////
         *USB_BUS = Some(UsbBus::new(Peripheral {
             usb,
             pin_dm: usb_dm,
@@ -121,6 +154,15 @@ const APP: () = {
             .device_class(USB_CLASS_CDC)
             .build();
 
+        //////////////////////////////////////////////////////////////////////
+        // Set up channels
+        //////////////////////////////////////////////////////////////////////
+        *HOST_TO_DEVICE = Some(Queue::u8());
+        *DEVICE_TO_HOST = Some(Queue::u8());
+
+        let (host_tx, host_rx) = HOST_TO_DEVICE.as_mut().unwrap().split();
+        let (devc_tx, devc_rx) = DEVICE_TO_HOST.as_mut().unwrap().split();
+
         let trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
 
         usb_dev.poll(&mut [&mut serial]);
@@ -130,17 +172,25 @@ const APP: () = {
             serial,
             led,
             trellis,
+            buffer: Buffer::new(),
+            usb_chan: UsbChannels { incoming: host_tx, outgoing: devc_rx },
+            cli_chan: ClientChannels { incoming: host_rx, outgoing: devc_tx },
         }
     }
 
-    #[task(binds = USB, resources = [usb_dev, serial, led])]
+    #[task(binds = USB, resources = [usb_dev, serial, led, buffer, usb_chan])]
     fn usb_tx(mut cx: usb_tx::Context) {
         cx.resources.led.set_high().ok();
-        usb_poll(&mut cx.resources.usb_dev, &mut cx.resources.serial);
+        usb_poll(
+            &mut cx.resources.usb_dev,
+            &mut cx.resources.serial,
+            &mut cx.resources.buffer,
+            &mut cx.resources.usb_chan,
+        );
         cx.resources.led.set_low().ok();
     }
 
-    #[idle(resources = [trellis])]
+    #[idle(resources = [trellis, cli_chan])]
     fn idle(mut cx: idle::Context) -> ! {
         match inner_idle(&mut cx) {
             Ok(_) => loop { continue; },
@@ -160,6 +210,7 @@ fn inner_idle(cx: &mut idle::Context) -> Result<(), neotrellis::Error> {
         .set_pixel_type(neotrellis::ColorOrder::GRB)?
         .set_pin(3)?;
 
+    // Cycle the board through some initial colors
     for c in 0..4 {
         let cols = match c {
             0 => [0x00, 0x10, 0x00],
@@ -188,14 +239,24 @@ fn inner_idle(cx: &mut idle::Context) -> Result<(), neotrellis::Error> {
     let mut sticky = [false; 16];
 
     'outer: loop {
-        // let mut buf = [0u8; 64];
+        //////////////////////////////////////////////////////////////////
+        // Process button presses
+        //////////////////////////////////////////////////////////////////
+        if let Some(msg) = cx.resources.cli_chan.incoming.dequeue() {
+            use HostToDeviceMessages::*;
+            use DeviceToHostMessages::*;
+
+            if Ping == msg {
+                cx.resources.cli_chan.outgoing.enqueue(
+                    Ack
+                ).ok();
+            }
+        }
 
         //////////////////////////////////////////////////////////////////
         // Process button presses
         //////////////////////////////////////////////////////////////////
-
-        cx.resources.trellis.seesaw().delay_us(10_000u32);
-        cx.resources.trellis.seesaw().delay_us(10_000u32);
+        cx.resources.trellis.seesaw().delay_us(20_000u32);
 
         for evt in cx
             .resources
@@ -236,26 +297,39 @@ fn inner_idle(cx: &mut idle::Context) -> Result<(), neotrellis::Error> {
 fn usb_poll<B: bus::UsbBus>(
     usb_dev: &mut UsbDevice<'static, B>,
     serial: &mut SerialPort<'static, B>,
+    buffer: &mut Buffer<U256>,
+    usb_chan: &mut UsbChannels,
 ) {
     if usb_dev.poll(&mut [serial]) {
-        let mut buf = [0u8; 8];
+        let mut buf = [0u8; 128];
 
-        match serial.read(&mut buf) {
-            Ok(count) if count > 0 => {
-                // Echo back in upper case
-                for c in buf[0..count].iter_mut() {
-                    if *c == b'z' {
-                        panic!();
+        if let Ok(count) = serial.read(&mut buf) {
+            let mut window = &buf[..count];
+
+            'cobs: while !window.is_empty() {
+                use FeedResult::*;
+                window = match buffer.feed::<HostToDeviceMessages>(&window) {
+                    Consumed => break 'cobs,
+                    OverFull(new_wind) => new_wind,
+                    DeserError(new_wind) => new_wind,
+                    Success { data, remaining } => {
+                        usb_chan.incoming.enqueue(data).ok();
+                        remaining
                     }
+                };
+            }
+        }
 
-                    if 0x61 <= *c && *c <= 0x7a {
-                        *c &= !0x20;
+        if let Some(msg) = usb_chan.outgoing.dequeue() {
+            if let Ok(mut slice) = postcard::to_slice_cobs(&msg, &mut buf) {
+                while let Ok(count) = serial.write(slice) {
+                    if count == slice.len() {
+                        break;
+                    } else {
+                        slice = &mut slice[count..];
                     }
                 }
-
-                serial.write(&buf[0..count]).ok();
             }
-            _ => {}
         }
     }
 }
