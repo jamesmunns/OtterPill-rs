@@ -38,6 +38,9 @@ use heapless::{
         Producer,
         Consumer,
     },
+    i::{
+        Queue as ConstQueue,
+    }
 };
 use postcard;
 
@@ -66,8 +69,8 @@ const APP: () = {
     #[init]
     fn init(cx: init::Context) -> init::LateResources {
         static mut USB_BUS: Option<UsbBusAllocator<UsbBus<Peripheral>>> = None;
-        static mut HOST_TO_DEVICE: Option<Queue<HostToDeviceMessages, U16, u8>> = None;
-        static mut DEVICE_TO_HOST: Option<Queue<DeviceToHostMessages, U16, u8>> = None;
+        static mut HOST_TO_DEVICE: Queue<HostToDeviceMessages, U16, u8> = Queue(ConstQueue::u8());
+        static mut DEVICE_TO_HOST: Queue<DeviceToHostMessages, U16, u8> = Queue(ConstQueue::u8());
 
         //////////////////////////////////////////////////////////////////////
         // Set up the hardware!
@@ -156,11 +159,8 @@ const APP: () = {
         //////////////////////////////////////////////////////////////////////
         // Set up channels
         //////////////////////////////////////////////////////////////////////
-        *HOST_TO_DEVICE = Some(Queue::u8());
-        *DEVICE_TO_HOST = Some(Queue::u8());
-
-        let (host_tx, host_rx) = HOST_TO_DEVICE.as_mut().unwrap().split();
-        let (devc_tx, devc_rx) = DEVICE_TO_HOST.as_mut().unwrap().split();
+        let (host_tx, host_rx) = HOST_TO_DEVICE.split();
+        let (devc_tx, devc_rx) = DEVICE_TO_HOST.split();
 
         let trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
 
