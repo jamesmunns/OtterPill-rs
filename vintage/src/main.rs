@@ -19,7 +19,7 @@ use stm32f0xx_hal::{
     prelude::*
 };
 use usb_device::{
-    bus::{self, UsbBusAllocator},
+    bus::UsbBusAllocator,
     prelude::*,
 };
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
@@ -37,7 +37,6 @@ use heapless::{
         Queue,
         Producer,
         Consumer,
-        SingleCore,
     },
 };
 use postcard;
@@ -182,10 +181,7 @@ const APP: () = {
     fn usb_tx(mut cx: usb_tx::Context) {
         cx.resources.led.set_high().ok();
         usb_poll(
-            &mut cx.resources.usb_dev,
-            &mut cx.resources.serial,
-            &mut cx.resources.buffer,
-            &mut cx.resources.usb_chan,
+            &mut cx
         );
         cx.resources.led.set_low().ok();
     }
@@ -294,35 +290,32 @@ fn inner_idle(cx: &mut idle::Context) -> Result<(), neotrellis::Error> {
     }
 }
 
-fn usb_poll<B: bus::UsbBus>(
-    usb_dev: &mut UsbDevice<'static, B>,
-    serial: &mut SerialPort<'static, B>,
-    buffer: &mut Buffer<U256>,
-    usb_chan: &mut UsbChannels,
+fn usb_poll(
+    cx: &mut usb_tx::Context
 ) {
-    if usb_dev.poll(&mut [serial]) {
+    if cx.resources.usb_dev.poll(&mut [cx.resources.serial]) {
         let mut buf = [0u8; 128];
 
-        if let Ok(count) = serial.read(&mut buf) {
+        if let Ok(count) = cx.resources.serial.read(&mut buf) {
             let mut window = &buf[..count];
 
             'cobs: while !window.is_empty() {
                 use FeedResult::*;
-                window = match buffer.feed::<HostToDeviceMessages>(&window) {
+                window = match cx.resources.buffer.feed::<HostToDeviceMessages>(&window) {
                     Consumed => break 'cobs,
                     OverFull(new_wind) => new_wind,
                     DeserError(new_wind) => new_wind,
                     Success { data, remaining } => {
-                        usb_chan.incoming.enqueue(data).ok();
+                        cx.resources.usb_chan.incoming.enqueue(data).ok();
                         remaining
                     }
                 };
             }
         }
 
-        if let Some(msg) = usb_chan.outgoing.dequeue() {
+        if let Some(msg) = cx.resources.usb_chan.outgoing.dequeue() {
             if let Ok(mut slice) = postcard::to_slice_cobs(&msg, &mut buf) {
-                while let Ok(count) = serial.write(slice) {
+                while let Ok(count) = cx.resources.serial.write(slice) {
                     if count == slice.len() {
                         break;
                     } else {
