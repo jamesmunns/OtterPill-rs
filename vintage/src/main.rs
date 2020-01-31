@@ -5,6 +5,10 @@ use panic_persist as _;
 
 use adafruit_neotrellis::{self as neotrellis, NeoTrellis};
 use embedded_hal::digital::v2::OutputPin;
+use heapless::{
+    i::Queue as ConstQueue,
+    spsc::{Consumer, Producer, Queue},
+};
 use rtfm::app;
 use stm32_usbd::UsbBus;
 use stm32f0xx_hal::{
@@ -14,35 +18,19 @@ use stm32f0xx_hal::{
         Alternate, PushPull, AF1,
     },
     i2c::I2c,
+    prelude::*,
     stm32f0::stm32f0x2::I2C1,
     usb::Peripheral,
-    prelude::*
 };
-use usb_device::{
-    bus::UsbBusAllocator,
-    prelude::*,
-};
+use usb_device::{bus::UsbBusAllocator, prelude::*};
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
 use vintage_icd::{
-    HostToDeviceMessages,
-    DeviceToHostMessages,
-    cobs_buffer::{
-        Buffer,
-        FeedResult,
-        consts::*,
-    }
+    cobs_buffer::{consts::*, Buffer},
+    DeviceToHostMessages, HostToDeviceMessages,
 };
-use heapless::{
-    spsc::{
-        Queue,
-        Producer,
-        Consumer,
-    },
-    i::{
-        Queue as ConstQueue,
-    }
-};
-use postcard;
+
+mod trellis;
+mod usb;
 
 pub struct UsbChannels {
     incoming: Producer<'static, HostToDeviceMessages, U16, u8>,
@@ -149,12 +137,13 @@ const APP: () = {
 
         let mut serial = SerialPort::new(USB_BUS.as_ref().unwrap());
 
-        let mut usb_dev = UsbDeviceBuilder::new(USB_BUS.as_ref().unwrap(), UsbVidPid(0x16c0, 0x27DD))
-            .manufacturer("Fake company")
-            .product("Serial port")
-            .serial_number("TEST")
-            .device_class(USB_CLASS_CDC)
-            .build();
+        let mut usb_dev =
+            UsbDeviceBuilder::new(USB_BUS.as_ref().unwrap(), UsbVidPid(0x16c0, 0x27DD))
+                .manufacturer("Fake company")
+                .product("Serial port")
+                .serial_number("TEST")
+                .device_class(USB_CLASS_CDC)
+                .build();
 
         //////////////////////////////////////////////////////////////////////
         // Set up channels
@@ -172,157 +161,31 @@ const APP: () = {
             led,
             trellis,
             buffer: Buffer::new(),
-            usb_chan: UsbChannels { incoming: host_tx, outgoing: devc_rx },
-            cli_chan: ClientChannels { incoming: host_rx, outgoing: devc_tx },
+            usb_chan: UsbChannels {
+                incoming: host_tx,
+                outgoing: devc_rx,
+            },
+            cli_chan: ClientChannels {
+                incoming: host_rx,
+                outgoing: devc_tx,
+            },
         }
     }
 
     #[task(binds = USB, resources = [usb_dev, serial, led, buffer, usb_chan])]
     fn usb_tx(mut cx: usb_tx::Context) {
         cx.resources.led.set_high().ok();
-        usb_poll(
-            &mut cx
-        );
+        crate::usb::usb_poll(&mut cx);
         cx.resources.led.set_low().ok();
     }
 
     #[idle(resources = [trellis, cli_chan])]
     fn idle(mut cx: idle::Context) -> ! {
-        match inner_idle(&mut cx) {
-            Ok(_) => loop { continue; },
+        match trellis::trellis_task(&mut cx) {
+            Ok(_) => loop {
+                continue;
+            },
             Err(_) => panic!(),
         };
     }
 };
-
-fn inner_idle(cx: &mut idle::Context) -> Result<(), neotrellis::Error> {
-    let mut color: u32 = 0b1001_0010_0100_1001;
-
-    cx.resources
-        .trellis
-        .neopixels()
-        .set_speed(neotrellis::Speed::Khz800)?
-        .set_pixel_count(16)?
-        .set_pixel_type(neotrellis::ColorOrder::GRB)?
-        .set_pin(3)?;
-
-    // Cycle the board through some initial colors
-    for c in 0..4 {
-        let cols = match c {
-            0 => [0x00, 0x10, 0x00],
-            1 => [0x10, 0x00, 0x00],
-            2 => [0x00, 0x00, 0x10],
-            _ => [0x00, 0x00, 0x00],
-        };
-
-        for i in 0..16 {
-            cx.resources
-                .trellis
-                .keypad()
-                .enable_key_event(i, neotrellis::Edge::Rising)?
-                .enable_key_event(i, neotrellis::Edge::Falling)?;
-
-            cx.resources
-                .trellis
-                .neopixels()
-                .set_pixel_rgb(i, cols[1], cols[0], cols[2])?;
-        }
-
-        cx.resources.trellis.neopixels().show()?;
-        cx.resources.trellis.seesaw().delay_us(150_000u32);
-    }
-
-    let mut sticky = [false; 16];
-
-    'outer: loop {
-        //////////////////////////////////////////////////////////////////
-        // Process button presses
-        //////////////////////////////////////////////////////////////////
-        if let Some(msg) = cx.resources.cli_chan.incoming.dequeue() {
-            use HostToDeviceMessages::*;
-            use DeviceToHostMessages::*;
-
-            if Ping == msg {
-                cx.resources.cli_chan.outgoing.enqueue(
-                    Ack
-                ).ok();
-            }
-        }
-
-        //////////////////////////////////////////////////////////////////
-        // Process button presses
-        //////////////////////////////////////////////////////////////////
-        cx.resources.trellis.seesaw().delay_us(20_000u32);
-
-        for evt in cx
-            .resources
-            .trellis
-            .keypad()
-            .get_events()?
-            .as_slice()
-        {
-            if evt.key == 15 && evt.event == neotrellis::Edge::Falling {
-                panic!()
-            }
-
-            if evt.event == neotrellis::Edge::Rising {
-                if sticky[evt.key as usize] {
-                    cx.resources
-                        .trellis
-                        .neopixels()
-                        .set_pixel_rgb(evt.key, 0, 0, 0)?;
-                    sticky[evt.key as usize] = false;
-                } else {
-                    let colors = color.to_le_bytes();
-
-                    cx.resources
-                        .trellis
-                        .neopixels()
-                        .set_pixel_rgb(evt.key, colors[1], colors[0], colors[2])?;
-
-                    color = color.rotate_left(1);
-                    sticky[(evt.key as usize)] = true;
-                }
-            }
-        }
-
-        cx.resources.trellis.neopixels().show()?;
-    }
-}
-
-fn usb_poll(
-    cx: &mut usb_tx::Context
-) {
-    if cx.resources.usb_dev.poll(&mut [cx.resources.serial]) {
-        let mut buf = [0u8; 128];
-
-        if let Ok(count) = cx.resources.serial.read(&mut buf) {
-            let mut window = &buf[..count];
-
-            'cobs: while !window.is_empty() {
-                use FeedResult::*;
-                window = match cx.resources.buffer.feed::<HostToDeviceMessages>(&window) {
-                    Consumed => break 'cobs,
-                    OverFull(new_wind) => new_wind,
-                    DeserError(new_wind) => new_wind,
-                    Success { data, remaining } => {
-                        cx.resources.usb_chan.incoming.enqueue(data).ok();
-                        remaining
-                    }
-                };
-            }
-        }
-
-        if let Some(msg) = cx.resources.usb_chan.outgoing.dequeue() {
-            if let Ok(mut slice) = postcard::to_slice_cobs(&msg, &mut buf) {
-                while let Ok(count) = cx.resources.serial.write(slice) {
-                    if count == slice.len() {
-                        break;
-                    } else {
-                        slice = &mut slice[count..];
-                    }
-                }
-            }
-        }
-    }
-}
