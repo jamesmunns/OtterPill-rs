@@ -14,6 +14,8 @@ use std::time::{
     Duration,
     Instant,
 };
+use std::io::prelude::*;
+use std::io;
 
 fn main() -> Result<(), ()> {
     let mut settings: SerialPortSettings = Default::default();
@@ -49,16 +51,16 @@ fn inner_loop(port: &mut Box<dyn SerialPort>) -> Result<(), ()> {
                 port.flush().map_err(drop)?;
             }
 
-            println!("SENT: {:?}", msg);
+            println!("\nSENT: {:?}", msg);
         }
 
         let buf = match port.read(&mut raw_buf) {
             Ok(ct) => {
-                println!("Got {} bytes", ct);
                 &raw_buf[..ct]
             },
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                println!("Timeout");
+                print!(".");
+                io::stdout().flush().ok().expect("Could not flush stdout");
                 continue;
             },
             Err(e) => {
@@ -70,14 +72,13 @@ fn inner_loop(port: &mut Box<dyn SerialPort>) -> Result<(), ()> {
         let mut window = &buf[..];
 
         'cobs: while !window.is_empty() {
-            println!("{:?}", window);
             use FeedResult::*;
             window = match cobs_buf.feed::<DeviceToHostMessages>(&window) {
                 Consumed => break 'cobs,
                 OverFull(new_wind) => new_wind,
                 DeserError(new_wind) => new_wind,
                 Success { data, remaining } => {
-                    println!("GOT: {:?}", data);
+                    println!("\nGOT: {:?}", data);
                     remaining
                 }
             };

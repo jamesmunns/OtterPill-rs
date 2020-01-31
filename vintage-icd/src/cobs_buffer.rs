@@ -49,7 +49,9 @@ where
 
         if let Some(n) = zero_pos {
             // Yes! We have an end of message here.
-            let (take, release) = input.split_at(n);
+            // Add one to include the zero in the "take" portion
+            // of the buffer, rather than in "release".
+            let (take, release) = input.split_at(n + 1);
 
             // Does it fit?
             if (self.idx + n) <= N::to_usize() {
@@ -88,5 +90,28 @@ where
         let new_end = self.idx + input.len();
         self.buf.as_mut_slice()[self.idx..new_end].copy_from_slice(input);
         self.idx = new_end;
+    }
+}
+
+#[test]
+fn loop_test() {
+    use serde::{Serialize, Deserialize};
+
+    #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+    struct Demo {
+        a: u32,
+        b: u8,
+    }
+
+    let mut raw_buf = [0u8; 64];
+    let mut cobs_buf: Buffer<consts::U64> = Buffer::new();
+
+    let ser = postcard::to_slice_cobs(&Demo { a: 10, b: 20 }, &mut raw_buf).unwrap();
+
+    if let FeedResult::Success{ data, remaining } = cobs_buf.feed(ser) {
+        assert_eq!(Demo { a: 10, b: 20 }, data);
+        assert_eq!(remaining.len(), 0);
+    } else {
+        panic!()
     }
 }
