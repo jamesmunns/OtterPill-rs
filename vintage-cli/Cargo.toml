@@ -12,6 +12,7 @@ serialport = "3.3.0"
 postcard = {version = "0.4.3", features = ["use-std"] }
 embedded-hal = "0.2.3"
 heapless = "0.5"
+rand = "0.7.3"
 
 [dependencies.vintage-icd]
 path = "../vintage-icd"

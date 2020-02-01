@@ -21,6 +21,14 @@ use std::io;
 use embedded_hal::blocking::i2c;
 use embedded_hal::blocking::delay::DelayUs;
 use adafruit_neotrellis::{self as neotrellis, NeoTrellis, Error};
+use rand::prelude::*;
+
+fn rand_exp() -> u8 {
+    let rf: f64 = random();
+    let rf = rf * rf * rf * rf;
+    let rf = rf * 255.0;
+    (rf as u8) >> 1
+}
 
 impl UsbRpcI2c {
     fn get_message_timeout(&mut self, timeout: Duration) -> Result<DeviceToHostMessages, ()> {
@@ -145,6 +153,21 @@ fn main() -> Result<(), ()> {
         continue;
     }
 
+    // for _ in 0..6 {
+    //     let mut bench = 0usize;
+    //     let start = Instant::now();
+
+    //     while start.elapsed() < Duration::from_secs(10) {
+    //         rpc.send_message(HostToDeviceMessages::Ping).unwrap();
+    //         if let Ok(DeviceToHostMessages::Ack) = rpc.get_message_timeout(Duration::from_secs(1)) {
+    //             bench += 1;
+    //         }
+    //     }
+
+    //     print!("{} loops, {} per second, ", bench, bench / 10);
+    //     println!("average rtt: {:.02}us", 1_000_000.0 / ((bench / 10) as f64));
+    // }
+
     trellis(NeoTrellis::new(
         rpc,
         Sleepy,
@@ -156,8 +179,6 @@ fn main() -> Result<(), ()> {
 }
 
 fn trellis(mut trellis: NeoTrellis<UsbRpcI2c, Sleepy>) -> Result<(), Error> {
-    let mut color = 0b1001_0010_0100_1000u32;
-
     trellis
         .neopixels()
         .set_speed(neotrellis::Speed::Khz800)?
@@ -190,6 +211,7 @@ fn trellis(mut trellis: NeoTrellis<UsbRpcI2c, Sleepy>) -> Result<(), Error> {
     }
 
     let mut sticky = [false; 16];
+    let mut last_event = Instant::now();
 
     'outer: loop {
         //////////////////////////////////////////////////////////////////
@@ -202,19 +224,51 @@ fn trellis(mut trellis: NeoTrellis<UsbRpcI2c, Sleepy>) -> Result<(), Error> {
                 panic!()
             }
 
+            trellis
+                .neopixels()
+                .set_pixel_rgb(15, 0, 0, 0)?;
+
             if evt.event == neotrellis::Edge::Rising {
+                last_event = Instant::now();
+
                 if sticky[evt.key as usize] {
                     trellis.neopixels().set_pixel_rgb(evt.key, 0, 0, 0)?;
                     sticky[evt.key as usize] = false;
                 } else {
-                    let colors = color.to_le_bytes();
+                    trellis
+                        .neopixels()
+                        .set_pixel_rgb(evt.key, rand_exp(), rand_exp(), rand_exp())?;
+                    sticky[(evt.key as usize)] = true;
+                }
+            }
+        }
+
+        if last_event.elapsed() > Duration::from_secs(5) {
+            let start = Instant::now();
+            let mut iter = (0..16).cycle();
+
+            while trellis.seesaw().keypad_get_count()? == 0 {
+                trellis.seesaw().delay_us((random::<u32>() % 1000) * 1000 + 100_000);
+
+                if let Some(_i) = iter.next() {
+                    let i = random::<u8>() % 16;
+
+                    sticky[i as usize] = true;
 
                     trellis
                         .neopixels()
-                        .set_pixel_rgb(evt.key, colors[1], colors[0], colors[2])?;
+                        .set_pixel_rgb(i, rand_exp(), rand_exp(), rand_exp())?;
 
-                    color = color.rotate_left(1);
-                    sticky[(evt.key as usize)] = true;
+                    trellis.neopixels().show()?;
+                }
+
+                if (random::<u16>() / 4) == 0 {
+                    for i in 0..16 {
+                        sticky[i as usize] = false;
+                        trellis
+                            .neopixels()
+                            .set_pixel_rgb(i, 0, 0, 0)?;
+                    }
                 }
             }
         }
