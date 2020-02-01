@@ -9,7 +9,12 @@ edition = "2018"
 [dependencies]
 serde = "1.0.104"
 serialport = "3.3.0"
-postcard = "0.4.3"
+postcard = {version = "0.4.3", features = ["use-std"] }
+embedded-hal = "0.2.3"
+heapless = "0.5"
 
 [dependencies.vintage-icd]
 path = "../vintage-icd"
+
+[dependencies.adafruit-neotrellis]
+path = "../adafruit-neotrellis"

@@ -10,3 +10,4 @@ edition = "2018"
 serde = { version = "1.0.104", default-features = false, features = ["derive"] }
 generic-array = "0.13.2"
 postcard = "0.4"
+heapless = "0.5"

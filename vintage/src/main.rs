@@ -29,8 +29,9 @@ use vintage_icd::{
     DeviceToHostMessages, HostToDeviceMessages,
 };
 
-mod trellis;
+// mod trellis;
 mod usb;
+mod i2c_rpc;
 
 pub struct UsbChannels {
     incoming: Producer<'static, HostToDeviceMessages, U16, u8>,
@@ -48,7 +49,9 @@ const APP: () = {
         usb_dev: UsbDevice<'static, UsbBus<Peripheral>>,
         serial: SerialPort<'static, UsbBus<Peripheral>>,
         led: PB13<stm32f0xx_hal::gpio::Output<PushPull>>,
-        trellis: NeoTrellis<I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>, Delay>,
+        // trellis: NeoTrellis<, Delay>,
+        delay: Delay,
+        i2c: I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>,
         buffer: Buffer<U256>,
         usb_chan: UsbChannels,
         cli_chan: ClientChannels,
@@ -151,7 +154,7 @@ const APP: () = {
         let (host_tx, host_rx) = HOST_TO_DEVICE.split();
         let (devc_tx, devc_rx) = DEVICE_TO_HOST.split();
 
-        let trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
+        // let trellis = neotrellis::NeoTrellis::new(i2c, delay, None).unwrap();
 
         usb_dev.poll(&mut [&mut serial]);
 
@@ -159,7 +162,8 @@ const APP: () = {
             usb_dev,
             serial,
             led,
-            trellis,
+            i2c,
+            delay,
             buffer: Buffer::new(),
             usb_chan: UsbChannels {
                 incoming: host_tx,
@@ -172,20 +176,16 @@ const APP: () = {
         }
     }
 
-    #[task(binds = USB, resources = [usb_dev, serial, led, buffer, usb_chan])]
+    #[task(binds = USB, resources = [usb_dev, serial, buffer, usb_chan])]
     fn usb_tx(mut cx: usb_tx::Context) {
-        cx.resources.led.set_high().ok();
         crate::usb::usb_poll(&mut cx);
-        cx.resources.led.set_low().ok();
     }
 
-    #[idle(resources = [trellis, cli_chan])]
+    #[idle(resources = [cli_chan, i2c, led, delay])]
     fn idle(mut cx: idle::Context) -> ! {
-        match trellis::trellis_task(&mut cx) {
-            Ok(_) => loop {
-                continue;
-            },
+        match i2c_rpc::task(&mut cx) {
+            Ok(_) => loop { continue; },
             Err(_) => panic!(),
-        };
+        }
     }
 };
