@@ -1,0 +1,21 @@
+[package]
+name = "phm-cli"
+version = "0.1.0"
+authors = ["James Munns <james.munns@ferrous-systems.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = "1.0.104"
+serialport = "3.3.0"
+postcard = {version = "0.4.3", features = ["use-std"] }
+embedded-hal = "0.2.3"
+heapless = "0.5"
+rand = "0.7.3"
+
+[dependencies.phm-icd]
+path = "../phm-icd"
+
+[dependencies.adafruit-neotrellis]
+path = "../adafruit-neotrellis"
