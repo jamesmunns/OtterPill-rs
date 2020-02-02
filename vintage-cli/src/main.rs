@@ -45,21 +45,23 @@ fn inner_loop(port: &mut Box<dyn SerialPort>) -> Result<(), ()> {
         if now.elapsed() >= Duration::from_millis(100) {
             now = Instant::now();
 
-            let msg = if count >= 1 {
-                HostToDeviceMessages::Reset
-            } else {
-                HostToDeviceMessages::Ping
-            };
+            // let msg = if count >= 1 {
+            //     HostToDeviceMessages::Reset
+            // } else {
+            //     HostToDeviceMessages::Ping
+            // };
+
+            let msg = HostToDeviceMessages::Ping;
 
             if let Ok(slice) = postcard::to_slice_cobs(&msg, &mut raw_buf) {
                 port.write_all(slice).map_err(drop).ok();
                 port.flush().map_err(drop).ok();
             }
 
-            if count >= 1 {
-                ::std::thread::sleep_ms(1000);
-                ::std::process::exit(0);
-            }
+            // if count >= 1 {
+            //     ::std::thread::sleep_ms(1000);
+            //     ::std::process::exit(0);
+            // }
 
             count += 1;
 

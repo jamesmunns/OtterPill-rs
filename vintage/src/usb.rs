@@ -10,7 +10,6 @@ pub fn usb_poll(cx: &mut crate::usb_tx::Context) {
 
     let mut buf = [0u8; 128];
 
-
     if usb.poll(&mut [serial]) {
         if let Ok(count) = serial.read(&mut buf) {
             let mut window = &buf[..count];
@@ -31,20 +30,18 @@ pub fn usb_poll(cx: &mut crate::usb_tx::Context) {
     }
 
     while let Some(msg) = outgoing.dequeue() {
-
         to_slice_cobs(&msg, &mut buf)
-        .map_err(drop)
-        .and_then(|mut slice| {
-            while let Ok(count) = serial.write(slice) {
-                if count == slice.len() {
-                    break;
-                } else {
-                    slice = &mut slice[count..];
+            .map_err(drop)
+            .and_then(|mut slice| {
+                while let Ok(count) = serial.write(slice) {
+                    if count == slice.len() {
+                        break;
+                    } else {
+                        slice = &mut slice[count..];
+                    }
                 }
-            }
-            Ok(())
-        })
-        .unwrap();
+                Ok(())
+            })
+            .unwrap();
     }
-
 }

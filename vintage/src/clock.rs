@@ -1,8 +1,6 @@
-use embedded_hal::digital::v2::OutputPin;
-use stm32f0xx_hal::{
-    prelude::*,
-};
 use core::sync::atomic::{AtomicU32, Ordering};
+use embedded_hal::digital::v2::OutputPin;
+use stm32f0xx_hal::prelude::*;
 
 #[allow(dead_code)]
 pub struct RollingClock(());

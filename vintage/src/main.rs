@@ -4,6 +4,8 @@
 use panic_persist as _;
 
 use adafruit_neotrellis::{self as neotrellis, NeoTrellis};
+use cortex_m::register::msp;
+use cortex_m_rt::pre_init;
 use embedded_hal::digital::v2::OutputPin;
 use heapless::{
     i::Queue as ConstQueue,
@@ -15,17 +17,15 @@ use stm32f0xx_hal::{
     delay::Delay,
     gpio::{
         gpiob::{PB13, PB6, PB7},
-        gpioc::{PC13},
+        gpioc::PC13,
         Alternate, PushPull, AF1,
     },
     i2c::I2c,
     prelude::*,
+    stm32::TIM7,
     stm32f0::stm32f0x2::I2C1,
+    timers::{Event, Timer},
     usb::Peripheral,
-    timers::{Timer, Event},
-    stm32::{
-        TIM7,
-    },
     watchdog::Watchdog,
 };
 use usb_device::{bus::UsbBusAllocator, prelude::*};
@@ -34,12 +34,11 @@ use vintage_icd::{
     cobs_buffer::{consts::*, Buffer},
     DeviceToHostMessages, HostToDeviceMessages,
 };
-use cortex_m_rt::pre_init;
-use cortex_m::register::msp;
 
+mod clock;
+mod colors;
 mod trellis;
 mod usb;
-mod clock;
 
 pub struct UsbChannels {
     incoming: Producer<'static, HostToDeviceMessages, U16, u8>,
@@ -90,59 +89,51 @@ const APP: () = {
             cx.device.IWDG,
         );
 
-        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer, boot0, wdog) = cortex_m::interrupt::free(|cs| {
-            let mut rcc = rcc
-                .configure()
-                .hsi48()
-                .enable_crs(crs)
-                .sysclk(48.mhz())
-                .pclk(24.mhz())
-                .freeze(&mut flash);
+        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer, boot0, wdog) =
+            cortex_m::interrupt::free(|cs| {
+                let mut rcc = rcc
+                    .configure()
+                    .hsi48()
+                    .enable_crs(crs)
+                    .sysclk(48.mhz())
+                    .pclk(24.mhz())
+                    .freeze(&mut flash);
 
-            let gpioa = gpioa.split(&mut rcc);
-            let gpiob = gpiob.split(&mut rcc);
-            let gpioc = gpioc.split(&mut rcc);
+                let gpioa = gpioa.split(&mut rcc);
+                let gpiob = gpiob.split(&mut rcc);
+                let gpioc = gpioc.split(&mut rcc);
 
-            let led = gpiob.pb13.into_push_pull_output(cs);
+                let led = gpiob.pb13.into_push_pull_output(cs);
 
-            let usb_dm = gpioa.pa11;
-            let usb_dp = gpioa.pa12;
+                let usb_dm = gpioa.pa11;
+                let usb_dp = gpioa.pa12;
 
-            let mut usb_dp = usb_dp.into_push_pull_output(&cs);
-            usb_dp.set_low().ok();
-            cortex_m::asm::delay(48_000_000 / 100);
-            let usb_dp = usb_dp.into_floating_input(&cs);
+                let mut usb_dp = usb_dp.into_push_pull_output(&cs);
+                usb_dp.set_low().ok();
+                cortex_m::asm::delay(48_000_000 / 500);
+                let usb_dp = usb_dp.into_floating_input(&cs);
 
-            let scl = gpiob.pb6.into_alternate_af1(&cs);
-            let sda = gpiob.pb7.into_alternate_af1(&cs);
+                let scl = gpiob.pb6.into_alternate_af1(&cs);
+                let sda = gpiob.pb7.into_alternate_af1(&cs);
 
-            let i2c = I2c::i2c1(i2c1, (scl, sda), 100.khz(), &mut rcc);
+                let i2c = I2c::i2c1(i2c1, (scl, sda), 100.khz(), &mut rcc);
 
-            let delay = Delay::new(syst, &rcc);
+                let delay = Delay::new(syst, &rcc);
 
-            let mut boot0 = gpioc.pc13.into_push_pull_output(&cs);
-            boot0.set_low().ok();
+                let mut boot0 = gpioc.pc13.into_push_pull_output(&cs);
+                boot0.set_low().ok();
 
-            // TODO: https://github.com/stm32-rs/stm32f0xx-hal/issues/90
-            // This timer seems to fire at twice the expected rate, for now
-            // just half the time
-            let mut ms_timer = Timer::tim7(tim7, 500.hz(), &mut rcc);
-            ms_timer.listen(Event::TimeOut);
+                // TODO: https://github.com/stm32-rs/stm32f0xx-hal/issues/90
+                // This timer seems to fire at twice the expected rate, for now
+                // just half the time
+                let mut ms_timer = Timer::tim7(tim7, 500.hz(), &mut rcc);
+                ms_timer.listen(Event::TimeOut);
 
-            let mut wdog = Watchdog::new(wdog);
-            wdog.start(2.hz());
+                let mut wdog = Watchdog::new(wdog);
+                wdog.start(2.hz());
 
-            (
-                usb_dm,
-                usb_dp,
-                led,
-                i2c,
-                delay,
-                ms_timer,
-                boot0,
-                wdog,
-            )
-        });
+                (usb_dm, usb_dp, led, i2c, delay, ms_timer, boot0, wdog)
+            });
 
         //////////////////////////////////////////////////////////////////////
         // Blink a few times to show we've [re]-booted

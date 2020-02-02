@@ -1,14 +1,35 @@
-use adafruit_neotrellis as neotrellis;
-use vintage_icd::{DeviceToHostMessages, HostToDeviceMessages};
 use crate::clock::RollingClock;
-use libm::{sinf, cosf, fabsf};
-use stm32f0xx_hal::stm32::Interrupt;
+use crate::colors;
+use adafruit_neotrellis as neotrellis;
+use core::cmp::{max, min};
 use embedded_hal::watchdog::Watchdog;
-use heapless::{Vec, consts::*};
-use core::cmp::{min, max};
+use heapless::{consts::*, Vec};
+use libm::{cosf, fabsf, sinf};
+use stm32f0xx_hal::stm32::Interrupt;
+use vintage_icd::{CurrentState, DeviceToHostMessages, HostToDeviceMessages, StatusMessage};
+
+enum State {
+    Idle {
+        last_ping: u32,
+    },
+    TimingSelected {
+        pin: u8,
+        start_ms: u32,
+        last_ping: u32,
+    },
+    Timeout {
+        start_ms: u32,
+        last_ping: u32,
+    },
+}
+
+// const WORK_DURATION_MS: u32 = 1000 * 60 * 30;
+// const TIMEOUT_NOTIFICATION_MS: u32 = 1000 * 60 * 5;
+const WORK_DURATION_MS: u32 = 1000 * 2 * 30;
+const TIMEOUT_NOTIFICATION_MS: u32 = 1000 * 2 * 5;
+const PING_INTERVAL_MS: u32 = 500;
 
 pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Error> {
-    let mut color: u32 = 0b1001_0010_0100_1001;
     let trellis = &mut *cx.resources.trellis;
     let incoming = &mut cx.resources.cli_chan.incoming;
     let outgoing = &mut cx.resources.cli_chan.outgoing;
@@ -48,267 +69,154 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
         wdog.feed();
     }
 
-    let mut sticky = [false; 16];
+    let mut initial_colors = [
+        colors::ORANGE_RED,
+        colors::CRIMSON,
+        colors::DARK_ORANGE,
+        colors::DARK_SALMON,
+        colors::GOLD,
+        colors::YELLOW,
+        colors::FOREST_GREEN,
+        colors::LAWN_GREEN,
+        colors::BLUE,
+        colors::DODGER_BLUE,
+        colors::DARK_VIOLET,
+        colors::HOT_PINK,
+        colors::VIOLET,
+        colors::INDIGO,
+        colors::DARK_GRAY,
+        colors::LIGHT_YELLOW,
+    ];
+
+    let mut last_color = [RGB8 { r: 0, g: 0, b: 0 }; 16];
+
+    initial_colors.iter_mut().for_each(|mut c| {
+        c.gamma_correct();
+        c.r >>= 2;
+        c.g >>= 2;
+        c.b >>= 2;
+    });
 
     let mut script: [Sequence; 16] = [
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
-
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
-
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
-
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
         Sequence::empty(),
     ];
 
-    script[0].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Sin(Cycler::new(2000.0, 2000, RGB8 { r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Sin(Cycler::new(2000.0, 2000, RGB8 { r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Sin(Cycler::new(2000.0, 2000, RGB8 { r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(3000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[1].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[2].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[3].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[4].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(3000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[5].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[6].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[7].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[8].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(3000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[9].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[10].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[11].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[12].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(3000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[13].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[14].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(2000, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
-
-    script[15].set(
-        &[
-            Action::new(Actions::Static(StayColor::new(2500, RGB8 { r: 0x00, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0xFF, g: 0x00, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0xFF, b: 0x00})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_up(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Fade(FadeColor::new_fade_down(1000, RGB8{ r: 0x00, g: 0x00, b: 0xFF})), Behavior::OneShot),
-            Action::new(Actions::Static(StayColor::new(1500, RGB8 { r: 0xFF, g: 0xFF, b: 0xFF})), Behavior::OneShot),
-        ],
-        Behavior::LoopN { current: 0, cycles: 5 },
-    );
+    // Set the initial colors. No scripts are active at this point
+    for (i, color) in initial_colors.iter().enumerate() {
+        trellis
+            .neopixels()
+            .set_pixel_rgb(i as u8, color.r, color.g, color.b)?;
+    }
+    trellis.neopixels().show()?;
+    let mut state = State::Idle {
+        last_ping: RollingClock::get_ms(),
+    };
 
     'outer: loop {
         wdog.feed();
 
         //////////////////////////////////////////////////////////////////
-        // Process button presses
+        // Process USB messages
         //////////////////////////////////////////////////////////////////
         if let Some(msg) = incoming.dequeue() {
-            use DeviceToHostMessages::*;
-            use HostToDeviceMessages::*;
-
-            if Ping == msg {
-                outgoing.enqueue(Ack).ok();
+            if HostToDeviceMessages::Ping == msg {
+                outgoing.enqueue(DeviceToHostMessages::Ack).ok();
                 rtfm::pend(Interrupt::USB);
-            } else if Reset == msg {
+            } else if HostToDeviceMessages::Reset == msg {
                 panic!();
             }
+        }
+
+        //////////////////////////////////////////////////////////////////
+        // Any pending outgoing messages?
+        //////////////////////////////////////////////////////////////////
+        let (next, msg) = match state {
+            State::Idle { last_ping } => {
+                if RollingClock::since(last_ping) >= PING_INTERVAL_MS {
+                    let now = RollingClock::get_ms();
+                    (
+                        Some(State::Idle { last_ping: now }),
+                        Some(DeviceToHostMessages::Status(StatusMessage {
+                            current_tick: now,
+                            state: CurrentState::Idle,
+                        })),
+                    )
+                } else {
+                    (None, None)
+                }
+            }
+            State::TimingSelected {
+                start_ms,
+                pin,
+                last_ping,
+            } => {
+                if RollingClock::since(last_ping) >= PING_INTERVAL_MS {
+                    let now = RollingClock::get_ms();
+                    (
+                        Some(State::TimingSelected {
+                            start_ms,
+                            pin,
+                            last_ping: now,
+                        }),
+                        Some(DeviceToHostMessages::Status(StatusMessage {
+                            current_tick: now,
+                            state: CurrentState::Timing {
+                                pin,
+                                elapsed: RollingClock::since(start_ms),
+                            },
+                        })),
+                    )
+                } else {
+                    (None, None)
+                }
+            }
+            State::Timeout {
+                start_ms,
+                last_ping,
+            } => {
+                if RollingClock::since(last_ping) >= PING_INTERVAL_MS {
+                    let now = RollingClock::get_ms();
+
+                    (
+                        Some(State::Timeout {
+                            start_ms,
+                            last_ping: now,
+                        }),
+                        Some(DeviceToHostMessages::Status(StatusMessage {
+                            current_tick: now,
+                            state: CurrentState::Timeout {
+                                elapsed: RollingClock::since(start_ms),
+                            },
+                        })),
+                    )
+                } else {
+                    (None, None)
+                }
+            }
+        };
+
+        if let Some(next) = next {
+            state = next;
+        }
+
+        if let Some(msg) = msg {
+            outgoing.enqueue(msg).ok();
+            rtfm::pend(Interrupt::USB);
         }
 
         //////////////////////////////////////////////////////////////////
@@ -316,29 +224,320 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
         //////////////////////////////////////////////////////////////////
         trellis.seesaw().delay_us(20_000u32);
 
-        for i in 0..16 {
-            if let Some(mut pix) = script[i].poll() {
-                pix.gamma_correct();
+        // Check for button events
+        for evt in trellis.keypad().get_events()?.as_slice() {
+            if evt.event == neotrellis::Edge::Rising {
+                let next = match state {
+                    State::Idle { .. } => {
+                        select_action(evt.key, &mut script, &initial_colors);
+                        let now = RollingClock::get_ms();
 
-                trellis.neopixels().set_pixel_rgb(
-                    i as u8,
-                    pix.r,
-                    pix.g,
-                    pix.b,
-                )?;
+                        Some(State::TimingSelected {
+                            pin: evt.key,
+                            start_ms: now,
+                            last_ping: now,
+                        })
+                    }
+                    State::TimingSelected { .. } => {
+                        idle_action(&mut script, &initial_colors);
+                        let now = RollingClock::get_ms();
+                        Some(State::Idle { last_ping: now })
+                    }
+                    State::Timeout { .. } => {
+                        idle_action(&mut script, &initial_colors);
+                        let now = RollingClock::get_ms();
+                        Some(State::Idle { last_ping: now })
+                    }
+                };
+
+                if let Some(next) = next {
+                    state = next;
+                }
             }
         }
 
-        trellis.neopixels().show()?;
+        // Check for timeout events
+        let next = match state {
+            State::Idle { .. } => None,
+            State::TimingSelected { start_ms, pin, .. } => {
+                if RollingClock::since(start_ms) >= WORK_DURATION_MS {
+                    timeout_action(pin, &mut script, &initial_colors);
+
+                    let now = RollingClock::get_ms();
+                    Some(State::Timeout {
+                        start_ms: now,
+                        last_ping: now,
+                    })
+                } else {
+                    None
+                }
+            }
+            State::Timeout { start_ms, .. } => {
+                if RollingClock::since(start_ms) >= TIMEOUT_NOTIFICATION_MS {
+                    idle_action(&mut script, &initial_colors);
+                    Some(State::Idle {
+                        last_ping: RollingClock::get_ms(),
+                    })
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(next) = next {
+            state = next;
+        }
+
+        // Update the screen
+        let mut any = false;
+        for i in 0..16 {
+            if let Some(pix) = script[i].poll() {
+                if last_color[i] != pix {
+                    any = true;
+                    trellis
+                        .neopixels()
+                        .set_pixel_rgb(i as u8, pix.r, pix.g, pix.b)?;
+                    last_color[i] = pix;
+                }
+            }
+        }
+
+        if any {
+            trellis.neopixels().show()?;
+        }
     }
 }
 
+struct IPos {
+    x: i8,
+    y: i8,
+}
 
-#[derive(Copy, Clone)]
-struct RGB8 {
-    r: u8,
-    g: u8,
-    b: u8,
+impl IPos {
+    fn move_xy_pin(&self, dx: i8, dy: i8) -> Option<u8> {
+        let x = self.x + dx;
+        let y = self.y + dy;
+        if ((x < 0) || (x > 3)) || ((y < 0) || (y > 3)) {
+            None
+        } else {
+            Some(IPos { x, y }.to_pin())
+        }
+    }
+
+    fn from_pin(pin: u8) -> Self {
+        IPos {
+            x: (pin & 0b11) as i8,
+            y: (pin >> 2) as i8,
+        }
+    }
+
+    fn distance_from_pin(&self, other_pin: u8) -> u8 {
+        let other = IPos::from_pin(other_pin);
+        let dx = (self.x - other.x).abs() as u8;
+        let dy = (self.y - other.y).abs() as u8;
+        max(dx, dy)
+    }
+
+    fn to_pin(&self) -> u8 {
+        ((self.y as u8) << 2) | (self.x as u8)
+    }
+}
+
+fn timeout_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
+    let k_u = key as usize;
+
+    for p in 0..16 {
+        let p_u = p as usize;
+
+        let color = &colors[k_u];
+
+        script[p_u].set(
+            &[
+                Action::new(
+                    Actions::Static(StayColor::new(300, color.clone())),
+                    Behavior::OneShot,
+                ),
+                Action::new(
+                    Actions::Static(StayColor::new(600, colors::BLACK)),
+                    Behavior::OneShot,
+                ),
+                Action::new(
+                    Actions::Static(StayColor::new(300, color.clone())),
+                    Behavior::OneShot,
+                ),
+                Action::new(
+                    Actions::Static(StayColor::new(2400, colors::BLACK)),
+                    Behavior::OneShot,
+                ),
+            ],
+            Behavior::LoopForever,
+        );
+    }
+}
+
+fn idle_action(script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
+    for p in 0..16 {
+        let p_u = p as usize;
+
+        let color = script[p_u].poll().unwrap_or_else(|| colors::BLACK);
+
+        script[p_u].set(
+            &[
+                Action::new(
+                    Actions::Fade(FadeColor::new_fade_down(500, color.clone())),
+                    Behavior::OneShot,
+                ),
+                Action::new(
+                    Actions::Static(StayColor::new(500, colors::BLACK)),
+                    Behavior::OneShot,
+                ),
+                Action::new(
+                    Actions::Fade(FadeColor::new_fade_up(500, colors[p_u].clone())),
+                    Behavior::OneShot,
+                ),
+            ],
+            Behavior::OneShot,
+        );
+    }
+}
+
+fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
+    let pos = IPos::from_pin(key);
+    let k_u = key as usize;
+
+    let mut soft_color = colors[k_u].clone();
+    soft_color.r >>= 1;
+    soft_color.g >>= 1;
+    soft_color.b >>= 1;
+
+    for p in 0..16 {
+        let p_u = p as usize;
+
+        script[p_u].clear();
+
+        match pos.distance_from_pin(p) {
+            0 => script[p_u].set(
+                &[
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(1000, colors::BLACK)),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Behavior::LoopForever,
+                    ),
+                ],
+                Behavior::OneShot,
+            ),
+            1 => script[p_u].set(
+                &[
+                    Action::new(
+                        Actions::Static(StayColor::new(250, colors::BLACK)),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(750, colors::BLACK)),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Behavior::LoopForever,
+                    ),
+                ],
+                Behavior::OneShot,
+            ),
+            2 => script[p_u].set(
+                &[
+                    Action::new(
+                        Actions::Static(StayColor::new(500, colors::BLACK)),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(500, colors::BLACK)),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Behavior::LoopForever,
+                    ),
+                ],
+                Behavior::OneShot,
+            ),
+            3 => script[p_u].set(
+                &[
+                    Action::new(
+                        Actions::Static(StayColor::new(750, colors::BLACK)),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Static(StayColor::new(250, colors::BLACK)),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Behavior::LoopForever,
+                    ),
+                ],
+                Behavior::OneShot,
+            ),
+            _ => panic!(),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub struct RGB8 {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
 impl RGB8 {
@@ -387,10 +586,10 @@ impl Sequence {
 
     fn set(&mut self, actions: &[Action], behavior: Behavior) {
         let amt = min(self.seq.capacity(), actions.len());
-        self.seq.clear();
+        self.clear();
+
         self.seq.extend_from_slice(&actions[..amt]).ok();
         self.behavior = behavior;
-        self.position = 0;
     }
 
     fn poll(&mut self) -> Option<RGB8> {
@@ -406,56 +605,45 @@ impl Sequence {
 
         use Behavior::*;
         match behavior {
-            OneShot => {
-                seq[*position]
-                    .poll()
-                    .or_else(|| {
-                        *position += 1;
-                        if *position < seq.len() {
-                            seq[*position].reinit();
-                            seq[*position].poll()
-                        } else {
-                            None
-                        }
-                    })
-            }
-            LoopForever => {
-                seq[*position]
-                    .poll()
-                    .or_else(|| {
-                        *position += 1;
+            OneShot => seq[*position].poll().or_else(|| {
+                *position += 1;
+                if *position < seq.len() {
+                    seq[*position].reinit();
+                    seq[*position].poll()
+                } else {
+                    None
+                }
+            }),
+            LoopForever => seq[*position].poll().or_else(|| {
+                *position += 1;
 
-                        if *position >= seq.len() {
-                            *position = 0;
-                        }
+                if *position >= seq.len() {
+                    *position = 0;
+                }
 
+                seq[*position].reinit();
+                seq[*position].poll()
+            }),
+            LoopN {
+                ref mut current,
+                cycles,
+            } => seq[*position].poll().or_else(|| {
+                *position += 1;
+
+                if *position >= seq.len() {
+                    if *current < *cycles {
+                        *position = 0;
+                        *current += 1;
                         seq[*position].reinit();
                         seq[*position].poll()
-                    })
-            }
-            LoopN{ ref mut current, cycles } => {
-                seq[*position]
-                    .poll()
-                    .or_else(|| {
-                        *position += 1;
-
-                        if *position >= seq.len() {
-                            if *current < *cycles {
-                                *position = 0;
-                                *current += 1;
-                                seq[*position].reinit();
-                                seq[*position].poll()
-                            } else {
-                                None
-                            }
-                        } else {
-                            seq[*position].reinit();
-                            seq[*position].poll()
-                        }
-
-
-                    })
-            }
+                    } else {
+                        None
+                    }
+                } else {
+                    seq[*position].reinit();
+                    seq[*position].poll()
+                }
+            }),
         }
     }
 }
@@ -468,10 +656,7 @@ struct Action {
 
 impl Action {
     fn new(action: Actions, behavior: Behavior) -> Self {
-        Self {
-            action,
-            behavior,
-        }
+        Self { action, behavior }
     }
 
     fn reinit(&mut self) {
@@ -479,43 +664,40 @@ impl Action {
 
         use Behavior::*;
         match &mut self.behavior {
-            OneShot => {},
-            LoopForever => {},
-            LoopN { ref mut current, .. } => {
+            OneShot => {}
+            LoopForever => {}
+            LoopN {
+                ref mut current, ..
+            } => {
                 *current = 0;
             }
         }
     }
 
     fn poll(&mut self) -> Option<RGB8> {
-        use Behavior::*;
         use Actions::*;
+        use Behavior::*;
 
         let action = &mut self.action;
         let behavior = &mut self.behavior;
 
         match behavior {
-            OneShot => {
+            OneShot => action.poll(),
+            LoopForever => action.poll().or_else(|| {
+                action.reinit();
                 action.poll()
-            },
-            LoopForever => {
-                action.poll()
-                    .or_else(|| {
-                        action.reinit();
-                        action.poll()
-                    })
-            },
-            LoopN { ref mut current, cycles } => {
-                action.poll()
-                    .or_else(|| {
-                        if *current < *cycles {
-                            *current += 1;
-                            action.poll()
-                        } else {
-                            None
-                        }
-                    })
-            }
+            }),
+            LoopN {
+                ref mut current,
+                cycles,
+            } => action.poll().or_else(|| {
+                if *current < *cycles {
+                    *current += 1;
+                    action.poll()
+                } else {
+                    None
+                }
+            }),
         }
     }
 }
@@ -524,10 +706,7 @@ impl Action {
 enum Behavior {
     OneShot,
     LoopForever,
-    LoopN {
-        current: usize,
-        cycles: usize,
-    },
+    LoopN { current: usize, cycles: usize },
 }
 
 #[derive(Clone)]
@@ -579,7 +758,7 @@ impl Cycler {
         let period_ms = period_ms * 2.0;
 
         Self {
-            start_ms: 0,
+            start_ms: RollingClock::get_ms(),
             period_ms,
             duration_ms,
             color,
@@ -592,11 +771,11 @@ impl Cycler {
     }
 
     fn poll(&self) -> Option<RGB8> {
-        if RollingClock::since(self.start_ms) >= self.duration_ms {
+        let delta = RollingClock::since(self.start_ms);
+
+        if delta >= self.duration_ms {
             return None;
         }
-
-        let delta = RollingClock::since(self.start_ms);
 
         let deltaf = (delta as f32);
         let normalized = deltaf / self.period_ms;
@@ -632,7 +811,7 @@ struct StayColor {
 impl StayColor {
     fn new(duration_ms: u32, color: RGB8) -> Self {
         Self {
-            start_ms: 0,
+            start_ms: RollingClock::get_ms(),
             duration_ms,
             color,
         }
@@ -660,31 +839,19 @@ impl FadeColor {
     fn new_fade_up(duration_ms: u32, color: RGB8) -> Self {
         let period_ms = (duration_ms as f32) * 2.0;
 
-        let mut cycler = Cycler::new(
-            period_ms,
-            duration_ms,
-            color,
-        );
+        let mut cycler = Cycler::new(period_ms, duration_ms, color);
         cycler.start_low();
 
-        Self {
-            cycler
-        }
+        Self { cycler }
     }
 
     fn new_fade_down(duration_ms: u32, color: RGB8) -> Self {
         let period_ms = (duration_ms as f32) * 2.0;
 
-        let mut cycler = Cycler::new(
-            period_ms,
-            duration_ms,
-            color,
-        );
+        let mut cycler = Cycler::new(period_ms, duration_ms, color);
         cycler.start_high();
 
-        Self {
-            cycler
-        }
+        Self { cycler }
     }
 
     fn reinit(&mut self) {

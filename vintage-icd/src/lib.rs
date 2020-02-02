@@ -7,28 +7,36 @@ pub mod cobs_buffer;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Message<T>
 {
-    id: u32,
-    payload: T
+    pub id: u32,
+    pub payload: T
 }
 
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum HostToDeviceMessages {
     Ping,
-    StatusLed(LedCommand),
     Reset,
+    Ack,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum DeviceToHostMessages {
-    Ack
+    Ack,
+    Ping,
+    Status(StatusMessage),
 }
 
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
-pub enum LedCommand {
-    On,
-    Off,
-    Toggle,
+pub struct StatusMessage {
+    pub current_tick: u32,
+    pub state: CurrentState,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
+pub enum CurrentState {
+    Idle,
+    Timing { pin: u8, elapsed: u32 },
+    Timeout { elapsed: u32 },
 }
