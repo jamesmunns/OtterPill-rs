@@ -21,6 +21,10 @@ use stm32f0xx_hal::{
     prelude::*,
     stm32f0::stm32f0x2::I2C1,
     usb::Peripheral,
+    timers::{Timer, Event},
+    stm32::{
+        TIM7,
+    }
 };
 use usb_device::{bus::UsbBusAllocator, prelude::*};
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
@@ -31,6 +35,7 @@ use vintage_icd::{
 
 mod trellis;
 mod usb;
+mod clock;
 
 pub struct UsbChannels {
     incoming: Producer<'static, HostToDeviceMessages, U16, u8>,
@@ -52,6 +57,9 @@ const APP: () = {
         buffer: Buffer<U256>,
         usb_chan: UsbChannels,
         cli_chan: ClientChannels,
+        ms_timer: Timer<TIM7>,
+        toggle: bool,
+        stepdown: u32,
     }
 
     #[init]
@@ -63,7 +71,7 @@ const APP: () = {
         //////////////////////////////////////////////////////////////////////
         // Set up the hardware!
         //////////////////////////////////////////////////////////////////////
-        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1, syst) = (
+        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1, syst, tim7) = (
             cx.device.USB,
             cx.device.RCC,
             cx.device.CRS,
@@ -72,9 +80,10 @@ const APP: () = {
             cx.device.GPIOB,
             cx.device.I2C1,
             cx.core.SYST,
+            cx.device.TIM7,
         );
 
-        let (usb_dm, usb_dp, mut led, i2c, delay) = cortex_m::interrupt::free(|cs| {
+        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer) = cortex_m::interrupt::free(|cs| {
             let mut rcc = rcc
                 .configure()
                 .hsi48()
@@ -85,6 +94,8 @@ const APP: () = {
 
             let gpioa = gpioa.split(&mut rcc);
             let gpiob = gpiob.split(&mut rcc);
+
+            let led = gpiob.pb13.into_push_pull_output(cs);
 
             let usb_dm = gpioa.pa11;
             let usb_dp = gpioa.pa12;
@@ -101,12 +112,19 @@ const APP: () = {
 
             let delay = Delay::new(syst, &rcc);
 
+            // TODO: https://github.com/stm32-rs/stm32f0xx-hal/issues/90
+            // This timer seems to fire at twice the expected rate, for now
+            // just half the time
+            let mut ms_timer = Timer::tim7(tim7, 500.hz(), &mut rcc);
+            ms_timer.listen(Event::TimeOut);
+
             (
                 usb_dm,
                 usb_dp,
-                gpiob.pb13.into_push_pull_output(cs),
+                led,
                 i2c,
                 delay,
+                ms_timer,
             )
         });
 
@@ -169,14 +187,20 @@ const APP: () = {
                 incoming: host_rx,
                 outgoing: devc_tx,
             },
+            ms_timer,
+            toggle: false,
+            stepdown: 0,
         }
     }
 
-    #[task(binds = USB, resources = [usb_dev, serial, led, buffer, usb_chan])]
+    #[task(binds = TIM7, resources = [led, ms_timer, toggle, stepdown])]
+    fn clock_tick(mut cx: clock_tick::Context) {
+        clock::tick(&mut cx);
+    }
+
+    #[task(binds = USB, resources = [usb_dev, serial, buffer, usb_chan])]
     fn usb_tx(mut cx: usb_tx::Context) {
-        cx.resources.led.set_high().ok();
         crate::usb::usb_poll(&mut cx);
-        cx.resources.led.set_low().ok();
     }
 
     #[idle(resources = [trellis, cli_chan])]

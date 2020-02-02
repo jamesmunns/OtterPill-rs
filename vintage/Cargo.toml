@@ -16,6 +16,7 @@ embedded-hal = "0.2.3"
 heapless = "0.5"
 cortex-m-rtfm = "0.5"
 postcard = "0.4.3"
+libm = "0.2.1"
 
 [dependencies.vintage-icd]
 version = "0.1"
