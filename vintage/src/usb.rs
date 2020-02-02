@@ -30,7 +30,7 @@ pub fn usb_poll(cx: &mut crate::usb_tx::Context) {
         }
     }
 
-    if let Some(msg) = outgoing.dequeue() {
+    while let Some(msg) = outgoing.dequeue() {
 
         to_slice_cobs(&msg, &mut buf)
         .map_err(drop)

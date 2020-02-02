@@ -16,6 +16,7 @@ pub struct Message<T>
 pub enum HostToDeviceMessages {
     Ping,
     StatusLed(LedCommand),
+    Reset,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]

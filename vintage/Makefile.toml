@@ -17,7 +17,17 @@ args = [
     "-s", "0x08000000:leave",
     "-D", "target/thumbv6m-none-eabi/release/vintage.bin"
 ]
-dependencies = ["objcopy"]
+dependencies = ["objcopy", "reset"]
+
+[tasks.reset]
+command = "cargo"
+args = [
+    "run",
+    "--manifest-path",
+    "../vintage-cli/Cargo.toml",
+    "--target",
+    "x86_64-unknown-linux-gnu"
+]
 
 [tasks.flash]
 command = "openocd"

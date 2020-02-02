@@ -15,6 +15,7 @@ use stm32f0xx_hal::{
     delay::Delay,
     gpio::{
         gpiob::{PB13, PB6, PB7},
+        gpioc::{PC13},
         Alternate, PushPull, AF1,
     },
     i2c::I2c,
@@ -24,7 +25,8 @@ use stm32f0xx_hal::{
     timers::{Timer, Event},
     stm32::{
         TIM7,
-    }
+    },
+    watchdog::Watchdog,
 };
 use usb_device::{bus::UsbBusAllocator, prelude::*};
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
@@ -32,6 +34,8 @@ use vintage_icd::{
     cobs_buffer::{consts::*, Buffer},
     DeviceToHostMessages, HostToDeviceMessages,
 };
+use cortex_m_rt::pre_init;
+use cortex_m::register::msp;
 
 mod trellis;
 mod usb;
@@ -60,6 +64,7 @@ const APP: () = {
         ms_timer: Timer<TIM7>,
         toggle: bool,
         stepdown: u32,
+        wdog: Watchdog,
     }
 
     #[init]
@@ -71,19 +76,21 @@ const APP: () = {
         //////////////////////////////////////////////////////////////////////
         // Set up the hardware!
         //////////////////////////////////////////////////////////////////////
-        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1, syst, tim7) = (
+        let (usb, rcc, crs, mut flash, gpioa, gpiob, gpioc, i2c1, syst, tim7, wdog) = (
             cx.device.USB,
             cx.device.RCC,
             cx.device.CRS,
             cx.device.FLASH,
             cx.device.GPIOA,
             cx.device.GPIOB,
+            cx.device.GPIOC,
             cx.device.I2C1,
             cx.core.SYST,
             cx.device.TIM7,
+            cx.device.IWDG,
         );
 
-        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer) = cortex_m::interrupt::free(|cs| {
+        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer, boot0, wdog) = cortex_m::interrupt::free(|cs| {
             let mut rcc = rcc
                 .configure()
                 .hsi48()
@@ -94,6 +101,7 @@ const APP: () = {
 
             let gpioa = gpioa.split(&mut rcc);
             let gpiob = gpiob.split(&mut rcc);
+            let gpioc = gpioc.split(&mut rcc);
 
             let led = gpiob.pb13.into_push_pull_output(cs);
 
@@ -112,11 +120,17 @@ const APP: () = {
 
             let delay = Delay::new(syst, &rcc);
 
+            let mut boot0 = gpioc.pc13.into_push_pull_output(&cs);
+            boot0.set_low().ok();
+
             // TODO: https://github.com/stm32-rs/stm32f0xx-hal/issues/90
             // This timer seems to fire at twice the expected rate, for now
             // just half the time
             let mut ms_timer = Timer::tim7(tim7, 500.hz(), &mut rcc);
             ms_timer.listen(Event::TimeOut);
+
+            let mut wdog = Watchdog::new(wdog);
+            wdog.start(2.hz());
 
             (
                 usb_dm,
@@ -125,6 +139,8 @@ const APP: () = {
                 i2c,
                 delay,
                 ms_timer,
+                boot0,
+                wdog,
             )
         });
 
@@ -190,6 +206,7 @@ const APP: () = {
             ms_timer,
             toggle: false,
             stepdown: 0,
+            wdog,
         }
     }
 
@@ -203,13 +220,37 @@ const APP: () = {
         crate::usb::usb_poll(&mut cx);
     }
 
-    #[idle(resources = [trellis, cli_chan])]
+    #[idle(resources = [trellis, cli_chan, wdog])]
     fn idle(mut cx: idle::Context) -> ! {
         match trellis::trellis_task(&mut cx) {
-            Ok(_) => loop {
-                continue;
-            },
+            Ok(_) => panic!(),
             Err(_) => panic!(),
         };
     }
 };
+
+#[pre_init]
+unsafe fn before_main() {
+    extern "C" {
+        static mut _panic_dump_start: u8;
+    }
+
+    let start_ptr = &mut _panic_dump_start as *mut u8;
+
+    // Panic-persist sets a flag to the start of the dump region
+    // when a panic occurs
+    if 0x0FACADE0 == core::ptr::read_unaligned(start_ptr.cast::<usize>()) {
+        // Clear the flag
+        start_ptr.cast::<usize>().write_unaligned(0x00000000);
+
+        // The DFU bootloader's reset vector and initial stack pointer
+        const SYSMEM_MSP: u32 = 0x1fffC800;
+        const SYSMEM_RESET: u32 = 0x1fffC804;
+
+        let dfu_msp = core::ptr::read(SYSMEM_MSP as *const u32);
+        let putter: *const fn() = SYSMEM_RESET as *const fn();
+
+        msp::write(dfu_msp);
+        (*putter)();
+    }
+}

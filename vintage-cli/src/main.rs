@@ -39,17 +39,29 @@ fn inner_loop(port: &mut Box<dyn SerialPort>) -> Result<(), ()> {
     let mut cobs_buf: Buffer<U256> = Buffer::new();
     let mut raw_buf = [0u8; 256];
     let mut now = Instant::now();
+    let mut count = 0;
 
     loop {
-        if now.elapsed() >= Duration::from_secs(2) {
+        if now.elapsed() >= Duration::from_millis(100) {
             now = Instant::now();
 
-            let msg = HostToDeviceMessages::Ping;
+            let msg = if count >= 1 {
+                HostToDeviceMessages::Reset
+            } else {
+                HostToDeviceMessages::Ping
+            };
 
             if let Ok(slice) = postcard::to_slice_cobs(&msg, &mut raw_buf) {
-                port.write_all(slice).map_err(drop)?;
-                port.flush().map_err(drop)?;
+                port.write_all(slice).map_err(drop).ok();
+                port.flush().map_err(drop).ok();
             }
+
+            if count >= 1 {
+                ::std::thread::sleep_ms(1000);
+                ::std::process::exit(0);
+            }
+
+            count += 1;
 
             println!("\nSENT: {:?}", msg);
         }
