@@ -79,6 +79,7 @@ fn main() -> Result<()> {
     let ret = match opt {
         SubCommands::Reset => {
             reset(&mut port).ok();
+            sleep(Duration::from_secs(1));
             Ok(())
         }
         SubCommands::Log => log(config, &mut port),
@@ -185,7 +186,7 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
                         }
 
                         // WRITE FILE
-                        let contents = serde_json::to_string(&current)?;
+                        let contents = serde_json::to_string_pretty(&current)?;
 
                         let mut opt = OpenOptions::new();
                         opt.write(true);
@@ -227,7 +228,7 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
                             log.time_spent += Duration::from_millis(delta as u64);
 
                             // WRITE FILE
-                            let contents = serde_json::to_string(&current)?;
+                            let contents = serde_json::to_string_pretty(&current)?;
 
                             let mut opt = OpenOptions::new();
                             opt.write(true);
@@ -257,7 +258,7 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
                         }
 
                         // WRITE FILE
-                        let contents = serde_json::to_string(&current)?;
+                        let contents = serde_json::to_string_pretty(&current)?;
 
                         let mut opt = OpenOptions::new();
                         opt.write(true);

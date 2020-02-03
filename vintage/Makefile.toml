@@ -9,7 +9,7 @@ args= [
     "target/thumbv6m-none-eabi/release/vintage.bin"
 ]
 
-[tasks.dfu]
+[tasks.dfu-noreset]
 command = "dfu-util"
 args = [
     "-d", "0483:df11",
@@ -19,7 +19,13 @@ args = [
 ]
 dependencies = [
     "objcopy",
-    "reset"
+]
+
+[tasks.dfu]
+dependencies = [
+    "objcopy",
+    "reset",
+    "dfu-noreset"
 ]
 
 [tasks.reset]

@@ -23,10 +23,8 @@ enum State {
     },
 }
 
-// const WORK_DURATION_MS: u32 = 1000 * 60 * 30;
-// const TIMEOUT_NOTIFICATION_MS: u32 = 1000 * 60 * 5;
-const WORK_DURATION_MS: u32 = 1000 * 2 * 30;
-const TIMEOUT_NOTIFICATION_MS: u32 = 1000 * 2 * 5;
+const WORK_DURATION_MS: u32 = 1000 * 60 * 30;
+const TIMEOUT_NOTIFICATION_MS: u32 = 1000 * 60 * 5;
 const PING_INTERVAL_MS: u32 = 500;
 
 pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Error> {
@@ -419,6 +417,10 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             0 => script[p_u].set(
                 &[
                     Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
                         Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
                         Behavior::OneShot,
                     ),
@@ -443,6 +445,10 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             ),
             1 => script[p_u].set(
                 &[
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Behavior::OneShot,
+                    ),
                     Action::new(
                         Actions::Static(StayColor::new(250, colors::BLACK)),
                         Behavior::OneShot,
@@ -473,6 +479,10 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             2 => script[p_u].set(
                 &[
                     Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Behavior::OneShot,
+                    ),
+                    Action::new(
                         Actions::Static(StayColor::new(500, colors::BLACK)),
                         Behavior::OneShot,
                     ),
@@ -501,6 +511,10 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             ),
             3 => script[p_u].set(
                 &[
+                    Action::new(
+                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Behavior::OneShot,
+                    ),
                     Action::new(
                         Actions::Static(StayColor::new(750, colors::BLACK)),
                         Behavior::OneShot,
