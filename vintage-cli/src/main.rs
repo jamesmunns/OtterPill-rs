@@ -1,32 +1,24 @@
-use serialport::prelude::*;
+use chrono::prelude::*;
+use chrono::{DateTime, Local, TimeZone};
 use postcard::{from_bytes, to_slice_cobs};
-use vintage_icd::{
-    HostToDeviceMessages,
-    DeviceToHostMessages,
-    cobs_buffer::{
-        Buffer,
-        FeedResult,
-        consts::*,
-    }
-};
+use serde::{Deserialize, Serialize};
+use serde_json;
+use serialport::prelude::*;
 use std::{
-    sync::mpsc::{Sender, Receiver, TryRecvError},
-    time::{
-        Duration,
-        Instant,
-    },
-    io::{self, prelude::*},
-    fs::{read_to_string, File, OpenOptions},
-    path::Path,
-    thread::sleep,
     collections::{HashMap, VecDeque},
+    fs::{read_to_string, File, OpenOptions},
+    io::{self, prelude::*},
+    path::Path,
+    sync::mpsc::{Receiver, Sender, TryRecvError},
+    thread::sleep,
+    time::{Duration, Instant},
 };
 use structopt::StructOpt;
-use serde::{Serialize, Deserialize};
 use toml::{from_str, to_string};
-use serde_json;
-use chrono::prelude::*;
-use chrono::{Local, DateTime, TimeZone};
+use vintage_icd::{
+    cobs_buffer::{consts::*, Buffer, FeedResult},
+    DeviceToHostMessages, HostToDeviceMessages,
+};
 
 #[derive(StructOpt, Debug)]
 #[structopt(rename_all = "kebab-case")]
@@ -70,9 +62,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 fn main() -> Result<()> {
     let opt = SubCommands::from_args();
 
-    let config = from_str::<Config>(
-        &read_to_string("./vintage-settings.toml")?
-    )?;
+    let config = from_str::<Config>(&read_to_string("./vintage-settings.toml")?)?;
 
     let mut settings: SerialPortSettings = Default::default();
     settings.timeout = Duration::from_millis(1000);
@@ -90,7 +80,7 @@ fn main() -> Result<()> {
         SubCommands::Reset => {
             reset(&mut port).ok();
             Ok(())
-        },
+        }
         SubCommands::Log => log(config, &mut port),
         SubCommands::Debug => debug(&mut port),
     };
@@ -145,14 +135,12 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
 
     loop {
         let buf = match port.read(&mut raw_buf) {
-            Ok(ct) => {
-                &raw_buf[..ct]
-            },
+            Ok(ct) => &raw_buf[..ct],
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
                 print!(".");
                 io::stdout().flush().ok().expect("Could not flush stdout");
                 continue;
-            },
+            }
             Err(e) => {
                 eprintln!("{:?}", e);
                 return Err(Error::from("BAD SERIAL ERROR"));
@@ -174,15 +162,15 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
             };
         }
 
-        use vintage_icd::{
-            StatusMessage,
-            CurrentState,
-        };
+        use vintage_icd::{CurrentState, StatusMessage};
         use CurrentState::*;
 
         while let Some(msg) = msgs.pop_front() {
             match msg {
-                DeviceToHostMessages::Status(StatusMessage { current_tick, state: CurrentState::Idle }) => {
+                DeviceToHostMessages::Status(StatusMessage {
+                    current_tick,
+                    state: CurrentState::Idle,
+                }) => {
                     // Were we tracking something before, and we are now idle?
                     if let Some(state) = log_state.as_ref() {
                         // Is there a task by the name of what we were tracking?
@@ -208,8 +196,11 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
                         file.write_all(contents.as_bytes())?;
                     }
                     log_state = None;
-                },
-                DeviceToHostMessages::Status(StatusMessage { current_tick, state: CurrentState::Timing { pin, elapsed } }) => {
+                }
+                DeviceToHostMessages::Status(StatusMessage {
+                    current_tick,
+                    state: CurrentState::Timing { pin, elapsed },
+                }) => {
                     // Is there a task by the name of what we were tracking?
                     if let Some(task_name) = &project_idx[pin as usize] {
                         let log = current.log.entry(task_name.to_string()).or_insert(TaskLog {
@@ -219,17 +210,17 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
 
                         // Were we tracking something before?
                         if log_state.is_none() {
-                            log_state = Some(LogState { pin, last_flush: 0, last_ticks: elapsed });
+                            log_state = Some(LogState {
+                                pin,
+                                last_flush: 0,
+                                last_ticks: elapsed,
+                            });
                             log.events.push(LogEvent::Start(Local::now()))
                         }
 
                         let ref_state = log_state.as_mut().unwrap();
                         let delta = elapsed - ref_state.last_flush;
                         ref_state.last_ticks = elapsed;
-
-
-
-
 
                         if delta >= 5000 {
                             ref_state.last_flush = elapsed;
@@ -247,9 +238,11 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
                             file.write_all(contents.as_bytes())?;
                         }
                     }
-
-                },
-                DeviceToHostMessages::Status(StatusMessage { current_tick, state: CurrentState::Timeout { elapsed } }) => {
+                }
+                DeviceToHostMessages::Status(StatusMessage {
+                    current_tick,
+                    state: CurrentState::Timeout { elapsed },
+                }) => {
                     // Were we tracking something before, and we are now timed out?
                     if let Some(state) = log_state.as_ref() {
                         // Is there a task by the name of what we were tracking?
@@ -275,8 +268,8 @@ fn log(cfg: Config, port: &mut Box<dyn SerialPort>) -> Result<()> {
                         file.write_all(contents.as_bytes())?;
                     }
                     log_state = None;
-                },
-                _ => {},
+                }
+                _ => {}
             }
         }
     }
@@ -302,14 +295,12 @@ fn debug(port: &mut Box<dyn SerialPort>) -> Result<()> {
         }
 
         let buf = match port.read(&mut raw_buf) {
-            Ok(ct) => {
-                &raw_buf[..ct]
-            },
+            Ok(ct) => &raw_buf[..ct],
             Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
                 print!(".");
                 io::stdout().flush().ok().expect("Could not flush stdout");
                 continue;
-            },
+            }
             Err(e) => {
                 eprintln!("{:?}", e);
                 return Err(Error::from("BAD SERIAL ERROR"));
