@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 use serde::{Serialize, Deserialize};
+use heapless::{String, consts::*};
 
 pub mod cobs_buffer;
 
@@ -17,6 +18,7 @@ pub enum HostToDeviceMessages {
     Ping,
     Reset,
     Ack,
+    GetPanic,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -24,6 +26,7 @@ pub enum DeviceToHostMessages {
     Ack,
     Ping,
     Status(StatusMessage),
+    Panic(String<U64>),
 }
 
 // ---------------------------------------------------------------------------

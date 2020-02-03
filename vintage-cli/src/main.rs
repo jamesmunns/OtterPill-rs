@@ -68,10 +68,10 @@ fn main() -> Result<()> {
     settings.timeout = Duration::from_millis(1000);
     settings.baud_rate = 115_200;
 
-    let mut port = match serialport::open_with_settings("/dev/ttyACM0", &settings) {
+    let mut port = match serialport::open_with_settings(&config.port, &settings) {
         Ok(port) => port,
         Err(e) => {
-            eprintln!("Failed to open \"{}\". Error: {}", "/dev/ttyACM0", e);
+            eprintln!("Failed to open \"{}\". Error: {}", &config.port, e);
             ::std::process::exit(1);
         }
     };
@@ -280,12 +280,27 @@ fn debug(port: &mut Box<dyn SerialPort>) -> Result<()> {
     let mut cobs_buf: Buffer<U256> = Buffer::new();
     let mut raw_buf = [0u8; 256];
     let mut now = Instant::now();
+    let mut any_acks = false;
+    let mut panic_once = false;
 
     loop {
-        if now.elapsed() >= Duration::from_millis(100) {
+        if now.elapsed() >= Duration::from_millis(500) {
             now = Instant::now();
 
             let msg = HostToDeviceMessages::Ping;
+
+            if let Ok(slice) = postcard::to_slice_cobs(&msg, &mut raw_buf) {
+                port.write_all(slice).map_err(drop).ok();
+                port.flush().map_err(drop).ok();
+            }
+
+            println!("\nSENT: {:?}", msg);
+        }
+
+        if !panic_once && any_acks {
+            panic_once = true;
+
+            let msg = HostToDeviceMessages::GetPanic;
 
             if let Ok(slice) = postcard::to_slice_cobs(&msg, &mut raw_buf) {
                 port.write_all(slice).map_err(drop).ok();
@@ -318,6 +333,9 @@ fn debug(port: &mut Box<dyn SerialPort>) -> Result<()> {
                 DeserError(new_wind) => new_wind,
                 Success { data, remaining } => {
                     println!("\nGOT: {:?}", data);
+                    if data == DeviceToHostMessages::Ack {
+                        any_acks = true;
+                    }
                     remaining
                 }
             };

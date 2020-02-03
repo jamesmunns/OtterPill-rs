@@ -1,12 +1,24 @@
 use crate::clock::RollingClock;
 use crate::colors;
-use adafruit_neotrellis as neotrellis;
+use adafruit_neotrellis::{self as neotrellis, NeoTrellis};
 use core::cmp::{max, min};
-use embedded_hal::watchdog::Watchdog;
-use heapless::{consts::*, Vec};
+// use embedded_hal::watchdog::Watchdog;
+use heapless::{
+    consts::*,
+    Vec,
+    String,
+    spsc::{
+        Producer,
+        Consumer,
+    }
+};
 use libm::{cosf, fabsf, sinf};
 use stm32f0xx_hal::stm32::Interrupt;
 use vintage_icd::{CurrentState, DeviceToHostMessages, HostToDeviceMessages, StatusMessage};
+use panic_persist::get_panic_message_bytes;
+
+use embedded_hal::blocking::delay::DelayUs;
+use embedded_hal::blocking::i2c::{Read, Write};
 
 enum State {
     Idle {
@@ -27,13 +39,12 @@ const WORK_DURATION_MS: u32 = 1000 * 60 * 30;
 const TIMEOUT_NOTIFICATION_MS: u32 = 1000 * 60 * 5;
 const PING_INTERVAL_MS: u32 = 500;
 
-pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Error> {
-    let trellis = &mut *cx.resources.trellis;
-    let incoming = &mut cx.resources.cli_chan.incoming;
-    let outgoing = &mut cx.resources.cli_chan.outgoing;
-    let wdog = &mut cx.resources.wdog;
+fn setup<I: Read + Write, D: DelayUs<u32>>(
+    trellis: &mut NeoTrellis<I, D>,
+    initial_colors: &mut [RGB8; 16]
+) -> Result<(), neotrellis::Error> {
 
-    wdog.feed();
+    // wdog.feed();
 
     trellis
         .neopixels()
@@ -64,8 +75,238 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
 
         trellis.neopixels().show()?;
         trellis.seesaw().delay_us(150_000u32);
-        wdog.feed();
+        // wdog.feed();
     }
+
+    initial_colors.iter_mut().for_each(|mut c| {
+        c.gamma_correct();
+        c.r >>= 2;
+        c.g >>= 2;
+        c.b >>= 2;
+    });
+
+
+
+    // Set the initial colors. No scripts are active at this point
+    for (i, color) in initial_colors.iter().enumerate() {
+        trellis
+            .neopixels()
+            .set_pixel_rgb(i as u8, color.r, color.g, color.b)?;
+    }
+    trellis.neopixels().show()?;
+
+    Ok(())
+}
+
+
+fn step<I: Read + Write, D: DelayUs<u32>>(
+    trellis: &mut NeoTrellis<I, D>,
+    initial_colors: &[RGB8; 16],
+    last_color: &mut [RGB8; 16],
+    script: &mut [Sequence; 16],
+    state: &mut State,
+    incoming: &mut Consumer<HostToDeviceMessages, U16, u8>,
+    outgoing: &mut Producer<DeviceToHostMessages, U16, u8>,
+) -> Result<(), neotrellis::Error> {
+   // wdog.feed();
+
+   //////////////////////////////////////////////////////////////////
+   // Process USB messages
+   //////////////////////////////////////////////////////////////////
+   if let Some(msg) = incoming.dequeue() {
+       if HostToDeviceMessages::Ping == msg {
+           outgoing.enqueue(DeviceToHostMessages::Ack).ok();
+           rtfm::pend(Interrupt::USB);
+       } else if HostToDeviceMessages::GetPanic == msg {
+           let string = if let Some(msg_b) = get_panic_message_bytes() {
+               let mut buf = Vec::new();
+               buf.extend_from_slice(msg_b).ok();
+               unsafe { String::from_utf8_unchecked(buf) }
+
+           } else {
+               let mut msg = String::new();
+               msg.push_str("No Panic :)").ok();
+               msg
+           };
+
+           outgoing.enqueue(DeviceToHostMessages::Panic(string)).ok();
+           rtfm::pend(Interrupt::USB);
+       } else if HostToDeviceMessages::Reset == msg {
+           panic!();
+       }
+   }
+
+   //////////////////////////////////////////////////////////////////
+   // Any pending outgoing messages?
+   //////////////////////////////////////////////////////////////////
+   let (next, msg) = match state {
+       State::Idle { last_ping } => {
+           if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
+               let now = RollingClock::get_ms();
+               (
+                   Some(State::Idle { last_ping: now }),
+                   Some(DeviceToHostMessages::Status(StatusMessage {
+                       current_tick: now,
+                       state: CurrentState::Idle,
+                   })),
+               )
+           } else {
+               (None, None)
+           }
+       }
+       State::TimingSelected {
+           start_ms,
+           pin,
+           last_ping,
+       } => {
+           if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
+               let now = RollingClock::get_ms();
+               (
+                   Some(State::TimingSelected {
+                       start_ms: *start_ms,
+                       pin: *pin,
+                       last_ping: now,
+                   }),
+                   Some(DeviceToHostMessages::Status(StatusMessage {
+                       current_tick: now,
+                       state: CurrentState::Timing {
+                           pin: *pin,
+                           elapsed: RollingClock::since(*start_ms),
+                       },
+                   })),
+               )
+           } else {
+               (None, None)
+           }
+       }
+       State::Timeout {
+           start_ms,
+           last_ping,
+       } => {
+           if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
+               let now = RollingClock::get_ms();
+
+               (
+                   Some(State::Timeout {
+                       start_ms: *start_ms,
+                       last_ping: now,
+                   }),
+                   Some(DeviceToHostMessages::Status(StatusMessage {
+                       current_tick: now,
+                       state: CurrentState::Timeout {
+                           elapsed: RollingClock::since(*start_ms),
+                       },
+                   })),
+               )
+           } else {
+               (None, None)
+           }
+       }
+   };
+
+   if let Some(next) = next {
+       *state = next;
+   }
+
+   if let Some(msg) = msg {
+       outgoing.enqueue(msg).ok();
+       rtfm::pend(Interrupt::USB);
+   }
+
+   //////////////////////////////////////////////////////////////////
+   // Process button presses
+   //////////////////////////////////////////////////////////////////
+   trellis.seesaw().delay_us(20_000u32);
+
+   // Check for button events
+   for evt in trellis.keypad().get_events()?.as_slice() {
+       if evt.event == neotrellis::Edge::Rising {
+           let next = match state {
+               State::Idle { .. } => {
+                   select_action(evt.key, script, &initial_colors);
+                   let now = RollingClock::get_ms();
+
+                   Some(State::TimingSelected {
+                       pin: evt.key,
+                       start_ms: now,
+                       last_ping: now,
+                   })
+               }
+               State::TimingSelected { .. } => {
+                   idle_action(script, &initial_colors);
+                   let now = RollingClock::get_ms();
+                   Some(State::Idle { last_ping: now })
+               }
+               State::Timeout { .. } => {
+                   idle_action(script, &initial_colors);
+                   let now = RollingClock::get_ms();
+                   Some(State::Idle { last_ping: now })
+               }
+           };
+
+           if let Some(next) = next {
+               *state = next;
+           }
+       }
+   }
+
+   // Check for timeout events
+   let next = match state {
+       State::Idle { .. } => None,
+       State::TimingSelected { start_ms, pin, .. } => {
+           if RollingClock::since(*start_ms) >= WORK_DURATION_MS {
+               timeout_action(*pin, script, &initial_colors);
+
+               let now = RollingClock::get_ms();
+               Some(State::Timeout {
+                   start_ms: now,
+                   last_ping: now,
+               })
+           } else {
+               None
+           }
+       }
+       State::Timeout { start_ms, .. } => {
+           if RollingClock::since(*start_ms) >= TIMEOUT_NOTIFICATION_MS {
+               idle_action(script, &initial_colors);
+               Some(State::Idle {
+                   last_ping: RollingClock::get_ms(),
+               })
+           } else {
+               None
+           }
+       }
+   };
+
+   if let Some(next) = next {
+       *state = next;
+   }
+
+   // Update the screen
+   let mut any = false;
+   for i in 0..16 {
+       if let Some(pix) = script[i].poll() {
+           if last_color[i] != pix {
+               any = true;
+               trellis
+                   .neopixels()
+                   .set_pixel_rgb(i as u8, pix.r, pix.g, pix.b)?;
+               last_color[i] = pix;
+           }
+       }
+   }
+
+   if any {
+       trellis.neopixels().show()?;
+   }
+
+   Ok(())
+}
+
+pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Error> {
+    let trellis = &mut *cx.resources.trellis;
+    let incoming = &mut cx.resources.cli_chan.incoming;
+    let outgoing = &mut cx.resources.cli_chan.outgoing;
 
     let mut initial_colors = [
         colors::ORANGE_RED,
@@ -88,13 +329,6 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
 
     let mut last_color = [RGB8 { r: 0, g: 0, b: 0 }; 16];
 
-    initial_colors.iter_mut().for_each(|mut c| {
-        c.gamma_correct();
-        c.r >>= 2;
-        c.g >>= 2;
-        c.b >>= 2;
-    });
-
     let mut script: [Sequence; 16] = [
         Sequence::empty(),
         Sequence::empty(),
@@ -114,195 +348,24 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
         Sequence::empty(),
     ];
 
-    // Set the initial colors. No scripts are active at this point
-    for (i, color) in initial_colors.iter().enumerate() {
-        trellis
-            .neopixels()
-            .set_pixel_rgb(i as u8, color.r, color.g, color.b)?;
-    }
-    trellis.neopixels().show()?;
     let mut state = State::Idle {
         last_ping: RollingClock::get_ms(),
     };
 
+    // let wdog = &mut cx.resources.wdog;
+
+    setup(trellis, &mut initial_colors)?;
+
     'outer: loop {
-        wdog.feed();
-
-        //////////////////////////////////////////////////////////////////
-        // Process USB messages
-        //////////////////////////////////////////////////////////////////
-        if let Some(msg) = incoming.dequeue() {
-            if HostToDeviceMessages::Ping == msg {
-                outgoing.enqueue(DeviceToHostMessages::Ack).ok();
-                rtfm::pend(Interrupt::USB);
-            } else if HostToDeviceMessages::Reset == msg {
-                panic!();
-            }
-        }
-
-        //////////////////////////////////////////////////////////////////
-        // Any pending outgoing messages?
-        //////////////////////////////////////////////////////////////////
-        let (next, msg) = match state {
-            State::Idle { last_ping } => {
-                if RollingClock::since(last_ping) >= PING_INTERVAL_MS {
-                    let now = RollingClock::get_ms();
-                    (
-                        Some(State::Idle { last_ping: now }),
-                        Some(DeviceToHostMessages::Status(StatusMessage {
-                            current_tick: now,
-                            state: CurrentState::Idle,
-                        })),
-                    )
-                } else {
-                    (None, None)
-                }
-            }
-            State::TimingSelected {
-                start_ms,
-                pin,
-                last_ping,
-            } => {
-                if RollingClock::since(last_ping) >= PING_INTERVAL_MS {
-                    let now = RollingClock::get_ms();
-                    (
-                        Some(State::TimingSelected {
-                            start_ms,
-                            pin,
-                            last_ping: now,
-                        }),
-                        Some(DeviceToHostMessages::Status(StatusMessage {
-                            current_tick: now,
-                            state: CurrentState::Timing {
-                                pin,
-                                elapsed: RollingClock::since(start_ms),
-                            },
-                        })),
-                    )
-                } else {
-                    (None, None)
-                }
-            }
-            State::Timeout {
-                start_ms,
-                last_ping,
-            } => {
-                if RollingClock::since(last_ping) >= PING_INTERVAL_MS {
-                    let now = RollingClock::get_ms();
-
-                    (
-                        Some(State::Timeout {
-                            start_ms,
-                            last_ping: now,
-                        }),
-                        Some(DeviceToHostMessages::Status(StatusMessage {
-                            current_tick: now,
-                            state: CurrentState::Timeout {
-                                elapsed: RollingClock::since(start_ms),
-                            },
-                        })),
-                    )
-                } else {
-                    (None, None)
-                }
-            }
-        };
-
-        if let Some(next) = next {
-            state = next;
-        }
-
-        if let Some(msg) = msg {
-            outgoing.enqueue(msg).ok();
-            rtfm::pend(Interrupt::USB);
-        }
-
-        //////////////////////////////////////////////////////////////////
-        // Process button presses
-        //////////////////////////////////////////////////////////////////
-        trellis.seesaw().delay_us(20_000u32);
-
-        // Check for button events
-        for evt in trellis.keypad().get_events()?.as_slice() {
-            if evt.event == neotrellis::Edge::Rising {
-                let next = match state {
-                    State::Idle { .. } => {
-                        select_action(evt.key, &mut script, &initial_colors);
-                        let now = RollingClock::get_ms();
-
-                        Some(State::TimingSelected {
-                            pin: evt.key,
-                            start_ms: now,
-                            last_ping: now,
-                        })
-                    }
-                    State::TimingSelected { .. } => {
-                        idle_action(&mut script, &initial_colors);
-                        let now = RollingClock::get_ms();
-                        Some(State::Idle { last_ping: now })
-                    }
-                    State::Timeout { .. } => {
-                        idle_action(&mut script, &initial_colors);
-                        let now = RollingClock::get_ms();
-                        Some(State::Idle { last_ping: now })
-                    }
-                };
-
-                if let Some(next) = next {
-                    state = next;
-                }
-            }
-        }
-
-        // Check for timeout events
-        let next = match state {
-            State::Idle { .. } => None,
-            State::TimingSelected { start_ms, pin, .. } => {
-                if RollingClock::since(start_ms) >= WORK_DURATION_MS {
-                    timeout_action(pin, &mut script, &initial_colors);
-
-                    let now = RollingClock::get_ms();
-                    Some(State::Timeout {
-                        start_ms: now,
-                        last_ping: now,
-                    })
-                } else {
-                    None
-                }
-            }
-            State::Timeout { start_ms, .. } => {
-                if RollingClock::since(start_ms) >= TIMEOUT_NOTIFICATION_MS {
-                    idle_action(&mut script, &initial_colors);
-                    Some(State::Idle {
-                        last_ping: RollingClock::get_ms(),
-                    })
-                } else {
-                    None
-                }
-            }
-        };
-
-        if let Some(next) = next {
-            state = next;
-        }
-
-        // Update the screen
-        let mut any = false;
-        for i in 0..16 {
-            if let Some(pix) = script[i].poll() {
-                if last_color[i] != pix {
-                    any = true;
-                    trellis
-                        .neopixels()
-                        .set_pixel_rgb(i as u8, pix.r, pix.g, pix.b)?;
-                    last_color[i] = pix;
-                }
-            }
-        }
-
-        if any {
-            trellis.neopixels().show()?;
-        }
+        step(
+            trellis,
+            &initial_colors,
+            &mut last_color,
+            &mut script,
+            &mut state,
+            incoming,
+            outgoing,
+        )?; // TODO
     }
 }
 
@@ -312,6 +375,7 @@ struct IPos {
 }
 
 impl IPos {
+    #[allow(dead_code)]
     fn move_xy_pin(&self, dx: i8, dy: i8) -> Option<u8> {
         let x = self.x + dx;
         let y = self.y + dy;
@@ -689,7 +753,6 @@ impl Action {
     }
 
     fn poll(&mut self) -> Option<RGB8> {
-        use Actions::*;
         use Behavior::*;
 
         let action = &mut self.action;
@@ -720,6 +783,8 @@ impl Action {
 enum Behavior {
     OneShot,
     LoopForever,
+
+    #[allow(dead_code)]
     LoopN { current: usize, cycles: usize },
 }
 
@@ -791,7 +856,7 @@ impl Cycler {
             return None;
         }
 
-        let deltaf = (delta as f32);
+        let deltaf = delta as f32;
         let normalized = deltaf / self.period_ms;
         let rad_norm = normalized * 2.0 * core::f32::consts::PI;
         let out_norm = (self.func)(rad_norm);
