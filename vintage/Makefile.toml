@@ -19,7 +19,7 @@ args = [
 ]
 dependencies = [
     "objcopy",
-    # "reset"
+    "reset"
 ]
 
 [tasks.reset]
@@ -29,7 +29,9 @@ args = [
     "--manifest-path",
     "../vintage-cli/Cargo.toml",
     "--target",
-    "x86_64-unknown-linux-gnu"
+    "x86_64-unknown-linux-gnu",
+    "--",
+    "reset",
 ]
 
 [tasks.flash]

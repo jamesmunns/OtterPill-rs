@@ -1,3 +1,6 @@
 hardware/
 **/target/*
 stm32f0xx-hal/
+
+vintage-cli/vintage-settings.toml
+vintage-cli/logs/
