@@ -116,10 +116,7 @@ const APP: () = {
 
                 let delay = Delay::new(syst, &rcc);
 
-                // TODO: https://github.com/stm32-rs/stm32f0xx-hal/issues/90
-                // This timer seems to fire at twice the expected rate, for now
-                // just half the time
-                let mut ms_timer = Timer::tim7(tim7, 500.hz(), &mut rcc);
+                let mut ms_timer = Timer::tim7(tim7, 1000.hz(), &mut rcc);
                 ms_timer.listen(Event::TimeOut);
 
                 let mut wdog = Watchdog::new(wdog);

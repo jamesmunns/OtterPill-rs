@@ -341,11 +341,11 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
             outgoing,
         )?; // TODO
 
-        // // For profiling the event loop
-        // outgoing
-        //     .enqueue(DeviceToHostMessages::CycleTime(RollingClock::since(start)))
-        //     .ok();
-        // rtfm::pend(Interrupt::USB);
+        // For profiling the event loop
+        outgoing
+            .enqueue(DeviceToHostMessages::CycleTime(RollingClock::since(start)))
+            .ok();
+        rtfm::pend(Interrupt::USB);
 
         loop {
             if RollingClock::since(start) >= 20 {
@@ -432,15 +432,15 @@ fn idle_action(script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
         script[p_u].set(
             &[
                 Action::new(
-                    Actions::Fade(FadeColor::new_fade_down(100, color)),
+                    Actions::Fade(FadeColor::new_fade_down(150, color)),
                     Behavior::OneShot,
                 ),
                 Action::new(
-                    Actions::Static(StayColor::new(200, colors::BLACK)),
+                    Actions::Static(StayColor::new(300, colors::BLACK)),
                     Behavior::OneShot,
                 ),
                 Action::new(
-                    Actions::Fade(FadeColor::new_fade_up(100, colors[p_u])),
+                    Actions::Fade(FadeColor::new_fade_up(150, colors[p_u])),
                     Behavior::OneShot,
                 ),
             ],
@@ -467,23 +467,23 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             0 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(100, colors[k_u])),
+                        Actions::Static(StayColor::new(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(400, colors::BLACK)), // 4
+                        Actions::Static(StayColor::new(600, colors::BLACK)), // 4
                         Behavior::OneShot,
                     ),
                     Action::new(
@@ -496,27 +496,27 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             1 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(100, colors::BLACK)), // 1
+                        Actions::Static(StayColor::new(150, colors::BLACK)), // 1
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(100, colors[k_u])),
+                        Actions::Static(StayColor::new(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(300, colors::BLACK)), // 3
+                        Actions::Static(StayColor::new(450, colors::BLACK)), // 3
                         Behavior::OneShot,
                     ),
                     Action::new(
@@ -529,27 +529,27 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             2 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(200, colors::BLACK)), // 2
+                        Actions::Static(StayColor::new(300, colors::BLACK)), // 2
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(100, colors[k_u])),
+                        Actions::Static(StayColor::new(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(200, colors::BLACK)), // 2
+                        Actions::Static(StayColor::new(300, colors::BLACK)), // 2
                         Behavior::OneShot,
                     ),
                     Action::new(
@@ -562,27 +562,27 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             3 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(300, colors::BLACK)), // 3
+                        Actions::Static(StayColor::new(450, colors::BLACK)), // 3
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(100, colors[k_u])),
+                        Actions::Static(StayColor::new(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
+                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(100, colors::BLACK)), // 1
+                        Actions::Static(StayColor::new(150, colors::BLACK)), // 1
                         Behavior::OneShot,
                     ),
                     Action::new(
