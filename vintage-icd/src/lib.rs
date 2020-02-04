@@ -27,6 +27,7 @@ pub enum DeviceToHostMessages {
     Ping,
     Status(StatusMessage),
     Panic(String<U64>),
+    CycleTime(u32),
 }
 
 // ---------------------------------------------------------------------------

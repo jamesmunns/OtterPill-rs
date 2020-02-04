@@ -188,8 +188,6 @@ fn step<I: Read + Write, D: DelayUs<u32>>(
     //////////////////////////////////////////////////////////////////
     // Process button presses
     //////////////////////////////////////////////////////////////////
-    trellis.seesaw().delay_us(20_000u32);
-
     // Check for button events
     for evt in trellis.keypad().get_events()?.as_slice() {
         if evt.event == neotrellis::Edge::Rising {
@@ -331,6 +329,8 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
 
     loop {
         wdog.feed();
+        let start = RollingClock::get_ms();
+
         step(
             trellis,
             &initial_colors,
@@ -340,6 +340,18 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
             incoming,
             outgoing,
         )?; // TODO
+
+        // // For profiling the event loop
+        // outgoing
+        //     .enqueue(DeviceToHostMessages::CycleTime(RollingClock::since(start)))
+        //     .ok();
+        // rtfm::pend(Interrupt::USB);
+
+        loop {
+            if RollingClock::since(start) >= 20 {
+                break;
+            }
+        }
     }
 }
 
