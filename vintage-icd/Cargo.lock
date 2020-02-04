@@ -130,6 +130,7 @@ name = "vintage-icd"
 version = "0.1.0"
 dependencies = [
  "generic-array 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "heapless 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "postcard 0.4.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.104 (registry+https://github.com/rust-lang/crates.io-index)",
 ]

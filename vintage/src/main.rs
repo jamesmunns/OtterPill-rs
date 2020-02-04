@@ -4,7 +4,6 @@
 use panic_persist as _;
 
 use adafruit_neotrellis::{self as neotrellis, NeoTrellis};
-use embedded_hal::digital::v2::OutputPin;
 use heapless::{
     i::Queue as ConstQueue,
     spsc::{Consumer, Producer, Queue},
@@ -23,7 +22,7 @@ use stm32f0xx_hal::{
     stm32f0::stm32f0x2::I2C1,
     timers::{Event, Timer},
     usb::Peripheral,
-    // watchdog::Watchdog,
+    watchdog::Watchdog,
 };
 use usb_device::{bus::UsbBusAllocator, prelude::*};
 use usbd_serial::{SerialPort, USB_CLASS_CDC};
@@ -47,20 +46,22 @@ pub struct ClientChannels {
     outgoing: Producer<'static, DeviceToHostMessages, U16, u8>,
 }
 
+type HalI2C1 = I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>;
+
 #[app(device = stm32f0xx_hal::stm32, peripherals = true)]
 const APP: () = {
     struct Resources {
         usb_dev: UsbDevice<'static, UsbBus<Peripheral>>,
         serial: SerialPort<'static, UsbBus<Peripheral>>,
         led: PB13<stm32f0xx_hal::gpio::Output<PushPull>>,
-        trellis: NeoTrellis<I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>, Delay>,
+        trellis: NeoTrellis<HalI2C1, Delay>,
         buffer: Buffer<U256>,
         usb_chan: UsbChannels,
         cli_chan: ClientChannels,
         ms_timer: Timer<TIM7>,
         toggle: bool,
         stepdown: u32,
-        // wdog: Watchdog,
+        wdog: Watchdog,
     }
 
     #[init]
@@ -72,7 +73,7 @@ const APP: () = {
         //////////////////////////////////////////////////////////////////////
         // Set up the hardware!
         //////////////////////////////////////////////////////////////////////
-        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1, syst, tim7, /*wdog*/) = (
+        let (usb, rcc, crs, mut flash, gpioa, gpiob, i2c1, syst, tim7, wdog) = (
             cx.device.USB,
             cx.device.RCC,
             cx.device.CRS,
@@ -82,10 +83,10 @@ const APP: () = {
             cx.device.I2C1,
             cx.core.SYST,
             cx.device.TIM7,
-            // cx.device.IWDG,
+            cx.device.IWDG,
         );
 
-        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer, /*wdog*/) =
+        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer, wdog) =
             cortex_m::interrupt::free(|cs| {
                 let mut rcc = rcc
                     .configure()
@@ -121,10 +122,10 @@ const APP: () = {
                 let mut ms_timer = Timer::tim7(tim7, 500.hz(), &mut rcc);
                 ms_timer.listen(Event::TimeOut);
 
-                // let mut wdog = Watchdog::new(wdog);
-                // wdog.start(2.hz());
+                let mut wdog = Watchdog::new(wdog);
+                wdog.start(2.hz());
 
-                (usb_dm, usb_dp, led, i2c, delay, ms_timer, /*wdog*/)
+                (usb_dm, usb_dp, led, i2c, delay, ms_timer, wdog)
             });
 
         //////////////////////////////////////////////////////////////////////
@@ -189,7 +190,7 @@ const APP: () = {
             ms_timer,
             toggle: false,
             stepdown: 0,
-            // wdog,
+            wdog,
         }
     }
 
@@ -203,11 +204,11 @@ const APP: () = {
         crate::usb::usb_poll(&mut cx);
     }
 
-    #[idle(resources = [trellis, cli_chan, /*wdog*/])]
+    #[idle(resources = [trellis, cli_chan, wdog])]
     fn idle(mut cx: idle::Context) -> ! {
         match trellis::trellis_task(&mut cx) {
             Ok(_) => panic!(),
-            Err(_) => panic!(),
+            Err(e) => panic!("{:?}", e),
         };
     }
 };

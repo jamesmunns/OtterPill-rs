@@ -4,6 +4,7 @@ use serde::de::DeserializeOwned;
 use postcard;
 use core::mem::MaybeUninit;
 
+#[derive(Default)]
 pub struct Buffer<N: ArrayLength<u8>> {
     buf: GenericArray<u8, N>,
     idx: usize,

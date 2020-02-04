@@ -2,20 +2,17 @@ use crate::clock::RollingClock;
 use crate::colors;
 use adafruit_neotrellis::{self as neotrellis, NeoTrellis};
 use core::cmp::{max, min};
-// use embedded_hal::watchdog::Watchdog;
+use embedded_hal::watchdog::Watchdog as _;
 use heapless::{
     consts::*,
-    Vec,
-    String,
-    spsc::{
-        Producer,
-        Consumer,
-    }
+    spsc::{Consumer, Producer},
+    String, Vec,
 };
 use libm::{cosf, fabsf, sinf};
-use stm32f0xx_hal::stm32::Interrupt;
-use vintage_icd::{CurrentState, DeviceToHostMessages, HostToDeviceMessages, StatusMessage};
 use panic_persist::get_panic_message_bytes;
+use stm32f0xx_hal::stm32::Interrupt;
+use stm32f0xx_hal::watchdog::Watchdog;
+use vintage_icd::{CurrentState, DeviceToHostMessages, HostToDeviceMessages, StatusMessage};
 
 use embedded_hal::blocking::delay::DelayUs;
 use embedded_hal::blocking::i2c::{Read, Write};
@@ -41,10 +38,10 @@ const PING_INTERVAL_MS: u32 = 500;
 
 fn setup<I: Read + Write, D: DelayUs<u32>>(
     trellis: &mut NeoTrellis<I, D>,
-    initial_colors: &mut [RGB8; 16]
+    initial_colors: &mut [RGB8; 16],
+    wdog: &mut Watchdog,
 ) -> Result<(), neotrellis::Error> {
-
-    // wdog.feed();
+    wdog.feed();
 
     trellis
         .neopixels()
@@ -53,29 +50,11 @@ fn setup<I: Read + Write, D: DelayUs<u32>>(
         .set_pixel_type(neotrellis::ColorOrder::GRB)?
         .set_pin(3)?;
 
-    // Cycle the board through some initial colors
-    for c in 0..4 {
-        let cols = match c {
-            0 => [0x00, 0x10, 0x00],
-            1 => [0x10, 0x00, 0x00],
-            2 => [0x00, 0x00, 0x10],
-            _ => [0x00, 0x00, 0x00],
-        };
-
-        for i in 0..16 {
-            trellis
-                .keypad()
-                .enable_key_event(i, neotrellis::Edge::Rising)?
-                .enable_key_event(i, neotrellis::Edge::Falling)?;
-
-            trellis
-                .neopixels()
-                .set_pixel_rgb(i, cols[1], cols[0], cols[2])?;
-        }
-
-        trellis.neopixels().show()?;
-        trellis.seesaw().delay_us(150_000u32);
-        // wdog.feed();
+    for i in 0..16 {
+        trellis
+            .keypad()
+            .enable_key_event(i, neotrellis::Edge::Rising)?
+            .enable_key_event(i, neotrellis::Edge::Falling)?;
     }
 
     initial_colors.iter_mut().for_each(|mut c| {
@@ -85,19 +64,8 @@ fn setup<I: Read + Write, D: DelayUs<u32>>(
         c.b >>= 2;
     });
 
-
-
-    // Set the initial colors. No scripts are active at this point
-    for (i, color) in initial_colors.iter().enumerate() {
-        trellis
-            .neopixels()
-            .set_pixel_rgb(i as u8, color.r, color.g, color.b)?;
-    }
-    trellis.neopixels().show()?;
-
     Ok(())
 }
-
 
 fn step<I: Read + Write, D: DelayUs<u32>>(
     trellis: &mut NeoTrellis<I, D>,
@@ -108,205 +76,210 @@ fn step<I: Read + Write, D: DelayUs<u32>>(
     incoming: &mut Consumer<HostToDeviceMessages, U16, u8>,
     outgoing: &mut Producer<DeviceToHostMessages, U16, u8>,
 ) -> Result<(), neotrellis::Error> {
-   // wdog.feed();
+    //////////////////////////////////////////////////////////////////
+    // Process USB messages
+    //////////////////////////////////////////////////////////////////
+    if let Some(msg) = incoming.dequeue() {
+        let responded = match msg {
+            HostToDeviceMessages::Ping => {
+                outgoing.enqueue(DeviceToHostMessages::Ack).ok();
+                true
+            }
+            HostToDeviceMessages::GetPanic => {
+                let string = if let Some(msg_b) = get_panic_message_bytes() {
+                    let mut buf = Vec::new();
+                    buf.extend_from_slice(msg_b).ok();
+                    unsafe { String::from_utf8_unchecked(buf) }
+                } else {
+                    let mut msg = String::new();
+                    msg.push_str("No Panic :)").ok();
+                    msg
+                };
 
-   //////////////////////////////////////////////////////////////////
-   // Process USB messages
-   //////////////////////////////////////////////////////////////////
-   if let Some(msg) = incoming.dequeue() {
-       if HostToDeviceMessages::Ping == msg {
-           outgoing.enqueue(DeviceToHostMessages::Ack).ok();
-           rtfm::pend(Interrupt::USB);
-       } else if HostToDeviceMessages::GetPanic == msg {
-           let string = if let Some(msg_b) = get_panic_message_bytes() {
-               let mut buf = Vec::new();
-               buf.extend_from_slice(msg_b).ok();
-               unsafe { String::from_utf8_unchecked(buf) }
+                outgoing.enqueue(DeviceToHostMessages::Panic(string)).ok();
+                true
+            }
+            HostToDeviceMessages::Reset => panic!(),
+            _ => false,
+        };
 
-           } else {
-               let mut msg = String::new();
-               msg.push_str("No Panic :)").ok();
-               msg
-           };
+        if responded {
+            rtfm::pend(Interrupt::USB);
+        }
+    }
 
-           outgoing.enqueue(DeviceToHostMessages::Panic(string)).ok();
-           rtfm::pend(Interrupt::USB);
-       } else if HostToDeviceMessages::Reset == msg {
-           panic!();
-       }
-   }
+    //////////////////////////////////////////////////////////////////
+    // Any pending outgoing messages?
+    //////////////////////////////////////////////////////////////////
+    let (next, msg) = match state {
+        State::Idle { last_ping } => {
+            if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
+                let now = RollingClock::get_ms();
+                (
+                    Some(State::Idle { last_ping: now }),
+                    Some(DeviceToHostMessages::Status(StatusMessage {
+                        current_tick: now,
+                        state: CurrentState::Idle,
+                    })),
+                )
+            } else {
+                (None, None)
+            }
+        }
+        State::TimingSelected {
+            start_ms,
+            pin,
+            last_ping,
+        } => {
+            if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
+                let now = RollingClock::get_ms();
+                (
+                    Some(State::TimingSelected {
+                        start_ms: *start_ms,
+                        pin: *pin,
+                        last_ping: now,
+                    }),
+                    Some(DeviceToHostMessages::Status(StatusMessage {
+                        current_tick: now,
+                        state: CurrentState::Timing {
+                            pin: *pin,
+                            elapsed: RollingClock::since(*start_ms),
+                        },
+                    })),
+                )
+            } else {
+                (None, None)
+            }
+        }
+        State::Timeout {
+            start_ms,
+            last_ping,
+        } => {
+            if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
+                let now = RollingClock::get_ms();
 
-   //////////////////////////////////////////////////////////////////
-   // Any pending outgoing messages?
-   //////////////////////////////////////////////////////////////////
-   let (next, msg) = match state {
-       State::Idle { last_ping } => {
-           if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
-               let now = RollingClock::get_ms();
-               (
-                   Some(State::Idle { last_ping: now }),
-                   Some(DeviceToHostMessages::Status(StatusMessage {
-                       current_tick: now,
-                       state: CurrentState::Idle,
-                   })),
-               )
-           } else {
-               (None, None)
-           }
-       }
-       State::TimingSelected {
-           start_ms,
-           pin,
-           last_ping,
-       } => {
-           if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
-               let now = RollingClock::get_ms();
-               (
-                   Some(State::TimingSelected {
-                       start_ms: *start_ms,
-                       pin: *pin,
-                       last_ping: now,
-                   }),
-                   Some(DeviceToHostMessages::Status(StatusMessage {
-                       current_tick: now,
-                       state: CurrentState::Timing {
-                           pin: *pin,
-                           elapsed: RollingClock::since(*start_ms),
-                       },
-                   })),
-               )
-           } else {
-               (None, None)
-           }
-       }
-       State::Timeout {
-           start_ms,
-           last_ping,
-       } => {
-           if RollingClock::since(*last_ping) >= PING_INTERVAL_MS {
-               let now = RollingClock::get_ms();
+                (
+                    Some(State::Timeout {
+                        start_ms: *start_ms,
+                        last_ping: now,
+                    }),
+                    Some(DeviceToHostMessages::Status(StatusMessage {
+                        current_tick: now,
+                        state: CurrentState::Timeout {
+                            elapsed: RollingClock::since(*start_ms),
+                        },
+                    })),
+                )
+            } else {
+                (None, None)
+            }
+        }
+    };
 
-               (
-                   Some(State::Timeout {
-                       start_ms: *start_ms,
-                       last_ping: now,
-                   }),
-                   Some(DeviceToHostMessages::Status(StatusMessage {
-                       current_tick: now,
-                       state: CurrentState::Timeout {
-                           elapsed: RollingClock::since(*start_ms),
-                       },
-                   })),
-               )
-           } else {
-               (None, None)
-           }
-       }
-   };
+    if let Some(next) = next {
+        *state = next;
+    }
 
-   if let Some(next) = next {
-       *state = next;
-   }
+    if let Some(msg) = msg {
+        outgoing.enqueue(msg).ok();
+        rtfm::pend(Interrupt::USB);
+    }
 
-   if let Some(msg) = msg {
-       outgoing.enqueue(msg).ok();
-       rtfm::pend(Interrupt::USB);
-   }
+    //////////////////////////////////////////////////////////////////
+    // Process button presses
+    //////////////////////////////////////////////////////////////////
+    trellis.seesaw().delay_us(20_000u32);
 
-   //////////////////////////////////////////////////////////////////
-   // Process button presses
-   //////////////////////////////////////////////////////////////////
-   trellis.seesaw().delay_us(20_000u32);
+    // Check for button events
+    for evt in trellis.keypad().get_events()?.as_slice() {
+        if evt.event == neotrellis::Edge::Rising {
+            let next = match state {
+                State::Idle { .. } => {
+                    select_action(evt.key, script, &initial_colors);
+                    let now = RollingClock::get_ms();
 
-   // Check for button events
-   for evt in trellis.keypad().get_events()?.as_slice() {
-       if evt.event == neotrellis::Edge::Rising {
-           let next = match state {
-               State::Idle { .. } => {
-                   select_action(evt.key, script, &initial_colors);
-                   let now = RollingClock::get_ms();
+                    Some(State::TimingSelected {
+                        pin: evt.key,
+                        start_ms: now,
+                        last_ping: now,
+                    })
+                }
+                State::TimingSelected { .. } => {
+                    idle_action(script, &initial_colors);
+                    let now = RollingClock::get_ms();
+                    Some(State::Idle { last_ping: now })
+                }
+                State::Timeout { .. } => {
+                    idle_action(script, &initial_colors);
+                    let now = RollingClock::get_ms();
+                    Some(State::Idle { last_ping: now })
+                }
+            };
 
-                   Some(State::TimingSelected {
-                       pin: evt.key,
-                       start_ms: now,
-                       last_ping: now,
-                   })
-               }
-               State::TimingSelected { .. } => {
-                   idle_action(script, &initial_colors);
-                   let now = RollingClock::get_ms();
-                   Some(State::Idle { last_ping: now })
-               }
-               State::Timeout { .. } => {
-                   idle_action(script, &initial_colors);
-                   let now = RollingClock::get_ms();
-                   Some(State::Idle { last_ping: now })
-               }
-           };
+            if let Some(next) = next {
+                *state = next;
+            }
+        }
+    }
 
-           if let Some(next) = next {
-               *state = next;
-           }
-       }
-   }
+    // Check for timeout events
+    let next = match state {
+        State::Idle { .. } => None,
+        State::TimingSelected { start_ms, pin, .. } => {
+            if RollingClock::since(*start_ms) >= WORK_DURATION_MS {
+                timeout_action(*pin, script, &initial_colors);
 
-   // Check for timeout events
-   let next = match state {
-       State::Idle { .. } => None,
-       State::TimingSelected { start_ms, pin, .. } => {
-           if RollingClock::since(*start_ms) >= WORK_DURATION_MS {
-               timeout_action(*pin, script, &initial_colors);
+                let now = RollingClock::get_ms();
+                Some(State::Timeout {
+                    start_ms: now,
+                    last_ping: now,
+                })
+            } else {
+                None
+            }
+        }
+        State::Timeout { start_ms, .. } => {
+            if RollingClock::since(*start_ms) >= TIMEOUT_NOTIFICATION_MS {
+                idle_action(script, &initial_colors);
+                Some(State::Idle {
+                    last_ping: RollingClock::get_ms(),
+                })
+            } else {
+                None
+            }
+        }
+    };
 
-               let now = RollingClock::get_ms();
-               Some(State::Timeout {
-                   start_ms: now,
-                   last_ping: now,
-               })
-           } else {
-               None
-           }
-       }
-       State::Timeout { start_ms, .. } => {
-           if RollingClock::since(*start_ms) >= TIMEOUT_NOTIFICATION_MS {
-               idle_action(script, &initial_colors);
-               Some(State::Idle {
-                   last_ping: RollingClock::get_ms(),
-               })
-           } else {
-               None
-           }
-       }
-   };
+    if let Some(next) = next {
+        *state = next;
+    }
 
-   if let Some(next) = next {
-       *state = next;
-   }
+    // Update the screen
+    let mut any = false;
+    for i in 0..16 {
+        if let Some(pix) = script[i].poll() {
+            if last_color[i] != pix {
+                any = true;
+                trellis
+                    .neopixels()
+                    .set_pixel_rgb(i as u8, pix.r, pix.g, pix.b)?;
+                last_color[i] = pix;
+            }
+        }
+    }
 
-   // Update the screen
-   let mut any = false;
-   for i in 0..16 {
-       if let Some(pix) = script[i].poll() {
-           if last_color[i] != pix {
-               any = true;
-               trellis
-                   .neopixels()
-                   .set_pixel_rgb(i as u8, pix.r, pix.g, pix.b)?;
-               last_color[i] = pix;
-           }
-       }
-   }
+    if any {
+        trellis.neopixels().show()?;
+    }
 
-   if any {
-       trellis.neopixels().show()?;
-   }
-
-   Ok(())
+    Ok(())
 }
 
 pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Error> {
     let trellis = &mut *cx.resources.trellis;
     let incoming = &mut cx.resources.cli_chan.incoming;
     let outgoing = &mut cx.resources.cli_chan.outgoing;
+    let wdog = &mut cx.resources.wdog;
 
     let mut initial_colors = [
         colors::ORANGE_RED,
@@ -352,11 +325,12 @@ pub fn trellis_task(cx: &mut crate::idle::Context) -> Result<(), neotrellis::Err
         last_ping: RollingClock::get_ms(),
     };
 
-    // let wdog = &mut cx.resources.wdog;
+    setup(trellis, &mut initial_colors, wdog)?;
 
-    setup(trellis, &mut initial_colors)?;
+    idle_action(&mut script, &initial_colors);
 
-    'outer: loop {
+    loop {
+        wdog.feed();
         step(
             trellis,
             &initial_colors,
@@ -416,7 +390,7 @@ fn timeout_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
         script[p_u].set(
             &[
                 Action::new(
-                    Actions::Static(StayColor::new(300, color.clone())),
+                    Actions::Static(StayColor::new(300, *color)),
                     Behavior::OneShot,
                 ),
                 Action::new(
@@ -424,7 +398,7 @@ fn timeout_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
                     Behavior::OneShot,
                 ),
                 Action::new(
-                    Actions::Static(StayColor::new(300, color.clone())),
+                    Actions::Static(StayColor::new(300, *color)),
                     Behavior::OneShot,
                 ),
                 Action::new(
@@ -446,15 +420,15 @@ fn idle_action(script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
         script[p_u].set(
             &[
                 Action::new(
-                    Actions::Fade(FadeColor::new_fade_down(500, color.clone())),
+                    Actions::Fade(FadeColor::new_fade_down(100, color)),
                     Behavior::OneShot,
                 ),
                 Action::new(
-                    Actions::Static(StayColor::new(500, colors::BLACK)),
+                    Actions::Static(StayColor::new(200, colors::BLACK)),
                     Behavior::OneShot,
                 ),
                 Action::new(
-                    Actions::Fade(FadeColor::new_fade_up(500, colors[p_u].clone())),
+                    Actions::Fade(FadeColor::new_fade_up(100, colors[p_u])),
                     Behavior::OneShot,
                 ),
             ],
@@ -467,7 +441,7 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
     let pos = IPos::from_pin(key);
     let k_u = key as usize;
 
-    let mut soft_color = colors[k_u].clone();
+    let mut soft_color = colors[k_u];
     soft_color.r >>= 1;
     soft_color.g >>= 1;
     soft_color.b >>= 1;
@@ -481,27 +455,27 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             0 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Actions::Static(StayColor::new(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(1000, colors::BLACK)),
+                        Actions::Static(StayColor::new(400, colors::BLACK)), // 4
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
                         Behavior::LoopForever,
                     ),
                 ],
@@ -510,31 +484,31 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             1 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(250, colors::BLACK)),
+                        Actions::Static(StayColor::new(100, colors::BLACK)), // 1
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Actions::Static(StayColor::new(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(750, colors::BLACK)),
+                        Actions::Static(StayColor::new(300, colors::BLACK)), // 3
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
                         Behavior::LoopForever,
                     ),
                 ],
@@ -543,31 +517,31 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             2 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(500, colors::BLACK)),
+                        Actions::Static(StayColor::new(200, colors::BLACK)), // 2
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Actions::Static(StayColor::new(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(500, colors::BLACK)),
+                        Actions::Static(StayColor::new(200, colors::BLACK)), // 2
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
                         Behavior::LoopForever,
                     ),
                 ],
@@ -576,31 +550,31 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
             3 => script[p_u].set(
                 &[
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(333, colors[p_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[p_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(750, colors::BLACK)),
+                        Actions::Static(StayColor::new(300, colors::BLACK)), // 3
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_up(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(250, colors[k_u].clone())),
+                        Actions::Static(StayColor::new(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(250, colors[k_u].clone())),
+                        Actions::Fade(FadeColor::new_fade_down(100, colors[k_u])),
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Static(StayColor::new(250, colors::BLACK)),
+                        Actions::Static(StayColor::new(100, colors::BLACK)), // 1
                         Behavior::OneShot,
                     ),
                     Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color.clone())),
+                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
                         Behavior::LoopForever,
                     ),
                 ],
@@ -671,9 +645,7 @@ impl Sequence {
     }
 
     fn poll(&mut self) -> Option<RGB8> {
-        if self.seq.is_empty() {
-            return None;
-        } else if self.position >= self.seq.len() {
+        if self.seq.is_empty() || (self.position >= self.seq.len()) {
             return None;
         }
 
@@ -785,7 +757,10 @@ enum Behavior {
     LoopForever,
 
     #[allow(dead_code)]
-    LoopN { current: usize, cycles: usize },
+    LoopN {
+        current: usize,
+        cycles: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -902,7 +877,7 @@ impl StayColor {
 
     fn poll(&self) -> Option<RGB8> {
         if RollingClock::since(self.start_ms) >= self.duration_ms {
-            return None;
+            None
         } else {
             Some(self.color)
         }

@@ -5,7 +5,7 @@ authors = ["James Munns <james.munns@ferrous-systems.com>"]
 edition = "2018"
 
 [dependencies]
-stm32f0xx-hal = { version = "0.15.2", features = [ "stm32f072", "rt", "stm32-usbd" ] }
+stm32f0xx-hal = { version = "0.16.0", features = [ "stm32f072", "rt", "stm32-usbd" ] }
 cortex-m = "0.6"
 cortex-m-rt = "0.6"
 stm32-usbd = { version = "0.5" }
@@ -47,6 +47,8 @@ codegen-units   = 1
 opt-level       = 0
 
 [patch.crates-io.stm32f0xx-hal]
-path = "../stm32f0xx-hal"
-# git = "https://github.com/stm32-rs/stm32f0xx-hal"
-# rev = "b15fc1532f738e06df23935446ce4bfa67b078cc"
+# path = "../stm32f0xx-hal"
+git = "https://github.com/stm32-rs/stm32f0xx-hal"
+
+# NOTE: more resilient i2c handling
+rev = "8136f6e0ba56db0a1dae7d19e2805d68a3f33ddb"
