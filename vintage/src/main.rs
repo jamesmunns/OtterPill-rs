@@ -33,6 +33,7 @@ use vintage_icd::{
 
 mod clock;
 mod colors;
+mod script;
 mod trellis;
 mod usb;
 
@@ -210,31 +211,31 @@ const APP: () = {
     }
 };
 
-// use cortex_m::register::msp;
-// use cortex_m_rt::pre_init;
-//
-// #[pre_init]
-// unsafe fn before_main() {
-//     extern "C" {
-//         static mut _panic_dump_start: u8;
-//     }
+#[cfg_attr(feature = "panic-dfu", cortex_m_rt::pre_init)]
+#[allow(dead_code)]
+unsafe fn before_main() {
+    extern "C" {
+        static mut _panic_dump_start: u8;
+    }
 
-//     let start_ptr = &mut _panic_dump_start as *mut u8;
+    use cortex_m::register::msp;
 
-//     // Panic-persist sets a flag to the start of the dump region
-//     // when a panic occurs
-//     if 0x0FACADE0 == core::ptr::read_unaligned(start_ptr.cast::<usize>()) {
-//         // Clear the flag
-//         start_ptr.cast::<usize>().write_unaligned(0x00000000);
+    let start_ptr = &mut _panic_dump_start as *mut u8;
 
-//         // The DFU bootloader's reset vector and initial stack pointer
-//         const SYSMEM_MSP: u32 = 0x1fffC800;
-//         const SYSMEM_RESET: u32 = 0x1fffC804;
+    // Panic-persist sets a flag to the start of the dump region
+    // when a panic occurs
+    if 0x0FACADE0 == core::ptr::read_unaligned(start_ptr.cast::<usize>()) {
+        // Clear the flag
+        start_ptr.cast::<usize>().write_unaligned(0x00000000);
 
-//         let dfu_msp = core::ptr::read(SYSMEM_MSP as *const u32);
-//         let putter: *const fn() = SYSMEM_RESET as *const fn();
+        // The DFU bootloader's reset vector and initial stack pointer
+        const SYSMEM_MSP: u32 = 0x1fffC800;
+        const SYSMEM_RESET: u32 = 0x1fffC804;
 
-//         msp::write(dfu_msp);
-//         (*putter)();
-//     }
-// }
+        let dfu_msp = core::ptr::read(SYSMEM_MSP as *const u32);
+        let putter: *const fn() = SYSMEM_RESET as *const fn();
+
+        msp::write(dfu_msp);
+        (*putter)();
+    }
+}

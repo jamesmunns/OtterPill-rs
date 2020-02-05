@@ -2,16 +2,13 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use embedded_hal::digital::v2::OutputPin;
 use stm32f0xx_hal::prelude::*;
 
-#[allow(dead_code)]
 pub struct RollingClock(());
 
 impl RollingClock {
-    #[allow(dead_code)]
     pub fn get_ms() -> u32 {
         ROLLING_MILLIS.load(Ordering::Acquire)
     }
 
-    #[allow(dead_code)]
     pub fn since(before: u32) -> u32 {
         Self::get_ms().wrapping_sub(before)
     }

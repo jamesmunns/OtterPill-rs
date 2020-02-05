@@ -30,6 +30,13 @@ path = "../adafruit-seesaw"
 version = "0.1"
 path = "../adafruit-neotrellis"
 
+[features]
+default = []
+
+# Feature to reboot directly to DFU on a panic. Prevents recovery
+# of a panic message on next boot. Handy for development
+panic-dfu = []
+
 [profile.release]
 lto             = true
 panic           = "abort"
