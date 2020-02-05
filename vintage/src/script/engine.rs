@@ -191,6 +191,7 @@ impl Action {
 impl ActionBuilder {
     #![allow(dead_code)]
 
+    #[inline(always)]
     pub fn new() -> Self {
         Self(Action {
             action: Actions::default(),
@@ -198,55 +199,79 @@ impl ActionBuilder {
         })
     }
 
+    #[inline(always)]
     pub fn finish(self) -> Action {
         self.0
     }
 
+    #[inline(always)]
     pub fn times(mut self, ct: usize) -> Self {
         self.0.behavior = Behavior::LoopN { current: 0, cycles: ct };
         self
     }
 
+    #[inline(always)]
     pub fn once(mut self) -> Self {
         self.0.behavior = Behavior::OneShot;
         self
     }
 
+    #[inline(always)]
     pub fn forever(mut self) -> Self {
         self.0.behavior = Behavior::LoopForever;
         self
     }
 
+    #[inline(always)]
     pub fn color(mut self, color: RGB8) -> Self {
         match &mut self.0.action {
-            Actions::Sin(a) => a.color = color,
-            Actions::Static(a) => a.color = color,
-            Actions::Fade(a) => a.inner_mut().color = color,
+            Actions::Sin(ref mut a) => a.color = color,
+            Actions::Static(ref mut a) => a.color = color,
+            Actions::Fade(ref mut a) => a.inner_mut().color = color,
         }
         self
     }
 
+    #[inline(always)]
     pub fn for_ms(mut self, duration: u32) -> Self {
         match &mut self.0.action {
-            Actions::Sin(a) => a.duration_ms = duration,
-            Actions::Static(a) => a.duration_ms = duration,
-            Actions::Fade(a) => {
+            Actions::Sin(ref mut a) => a.duration_ms = duration,
+            Actions::Static(ref mut a) => a.duration_ms = duration,
+            Actions::Fade(ref mut a) => {
                 a.inner_mut().duration_ms = duration;
-                a.inner_mut().period_ms = (duration as f32) * 2.0;
+                a.inner_mut().period_ms = (duration as f32) * 4.0;
             }
         }
         self
     }
 
-    pub fn period_ms(mut self, duration: f32) -> Self {
+    #[inline(always)]
+    pub fn dur_per_ms(mut self, duration: u32, period_ms: f32) -> Self {
         match &mut self.0.action {
-            Actions::Sin(a) => a.period_ms = duration,
-            Actions::Static(_) => {},
-            Actions::Fade(a) => a.inner_mut().period_ms = duration,
+            Actions::Sin(ref mut a) => {
+                a.duration_ms = duration;
+                a.period_ms = period_ms * 2.0
+            },
+            Actions::Static(ref mut a) => a.duration_ms = duration,
+            Actions::Fade(ref mut a) => {
+                a.inner_mut().duration_ms = duration;
+                a.inner_mut().period_ms = (duration as f32) * 4.0;
+            }
         }
         self
     }
 
+    #[inline(always)]
+    pub fn period_ms(mut self, duration: f32) -> Self {
+        match &mut self.0.action {
+            Actions::Sin(ref mut a) => a.period_ms = duration,
+            Actions::Static(_) => {},
+            Actions::Fade(ref mut a) => a.inner_mut().period_ms = duration,
+        }
+        self
+    }
+
+    #[inline(always)]
     pub fn sin(mut self) -> Self {
         self.0.action = match self.0.action {
             s @ Actions::Sin(_) => s,
@@ -259,6 +284,7 @@ impl ActionBuilder {
         self
     }
 
+    #[inline(always)]
     pub fn solid(mut self) -> Self {
         self.0.action = match self.0.action {
             Actions::Sin(cycler) => Actions::Static(StayColor::new(cycler.duration_ms, cycler.color)),
@@ -268,6 +294,7 @@ impl ActionBuilder {
         self
     }
 
+    #[inline(always)]
     pub fn fade_up(mut self) -> Self {
         self.0.action = match self.0.action {
             Actions::Sin(cycler) => Actions::Fade(FadeColor::new_fade_up(cycler.duration_ms, cycler.color)),
@@ -277,6 +304,7 @@ impl ActionBuilder {
         self
     }
 
+    #[inline(always)]
     pub fn fade_down(mut self) -> Self {
         self.0.action = match self.0.action {
             Actions::Sin(cycler) => Actions::Fade(FadeColor::new_fade_down(cycler.duration_ms, cycler.color)),
