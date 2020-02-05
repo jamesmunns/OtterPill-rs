@@ -21,8 +21,7 @@ use crate::{
     clock::RollingClock,
     colors::{self, RGB8},
     script::{
-        engine::{Action, Actions, Behavior, Sequence},
-        behaviors::{Cycler, StayColor, FadeColor},
+        engine::{Action, Behavior, Sequence},
     },
 };
 
@@ -410,22 +409,10 @@ fn timeout_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
 
         script[p_u].set(
             &[
-                Action::new(
-                    Actions::Static(StayColor::new(300, *color)),
-                    Behavior::OneShot,
-                ),
-                Action::new(
-                    Actions::Static(StayColor::new(600, colors::BLACK)),
-                    Behavior::OneShot,
-                ),
-                Action::new(
-                    Actions::Static(StayColor::new(300, *color)),
-                    Behavior::OneShot,
-                ),
-                Action::new(
-                    Actions::Static(StayColor::new(2400, colors::BLACK)),
-                    Behavior::OneShot,
-                ),
+                Action::build().solid().color(*color).for_ms(300).once().finish(),
+                Action::build().solid().color(colors::BLACK).for_ms(600).once().finish(),
+                Action::build().solid().color(*color).for_ms(300).once().finish(),
+                Action::build().solid().color(colors::BLACK).for_ms(2400).once().finish(),
             ],
             Behavior::LoopForever,
         );
@@ -440,18 +427,9 @@ fn idle_action(script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
 
         script[p_u].set(
             &[
-                Action::new(
-                    Actions::Fade(FadeColor::new_fade_down(150, color)),
-                    Behavior::OneShot,
-                ),
-                Action::new(
-                    Actions::Static(StayColor::new(300, colors::BLACK)),
-                    Behavior::OneShot,
-                ),
-                Action::new(
-                    Actions::Fade(FadeColor::new_fade_up(150, colors[p_u])),
-                    Behavior::OneShot,
-                ),
+                Action::build().fade_down().color(color).for_ms(150).once().finish(),
+                Action::build().solid().color(colors::BLACK).for_ms(300).once().finish(),
+                Action::build().fade_up().color(colors[p_u]).for_ms(150).once().finish(),
             ],
             Behavior::OneShot,
         );
@@ -475,129 +453,48 @@ fn select_action(key: u8, script: &mut [Sequence; 16], colors: &[RGB8; 16]) {
         match pos.distance_from_pin(p) {
             0 => script[p_u].set(
                 &[
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(600, colors::BLACK)), // 4
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
-                        Behavior::LoopForever,
-                    ),
+                    Action::build().fade_down().for_ms(150).color(colors[p_u]).once().finish(),
+                    Action::build().fade_up().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().fade_down().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(600).color(colors::BLACK).once().finish(),
+                    Action::build().sin().for_ms(10000).period_ms(10000.0).color(colors[k_u]).forever().finish(),
                 ],
                 Behavior::OneShot,
             ),
             1 => script[p_u].set(
                 &[
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(150, colors::BLACK)), // 1
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(450, colors::BLACK)), // 3
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
-                        Behavior::LoopForever,
-                    ),
+                    Action::build().fade_down().for_ms(150).color(colors[p_u]).once().finish(),
+                    Action::build().solid().for_ms(150).color(colors::BLACK).once().finish(),
+                    Action::build().fade_up().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().fade_down().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(450).color(colors::BLACK).once().finish(),
+                    Action::build().sin().for_ms(10000).period_ms(10000.0).color(colors[k_u]).forever().finish(),
                 ],
                 Behavior::OneShot,
             ),
             2 => script[p_u].set(
                 &[
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(300, colors::BLACK)), // 2
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(300, colors::BLACK)), // 2
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
-                        Behavior::LoopForever,
-                    ),
+                    Action::build().fade_down().for_ms(150).color(colors[p_u]).once().finish(),
+                    Action::build().solid().for_ms(300).color(colors::BLACK).once().finish(),
+                    Action::build().fade_up().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().fade_down().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(300).color(colors::BLACK).once().finish(),
+                    Action::build().sin().for_ms(10000).period_ms(10000.0).color(colors[k_u]).forever().finish(),
                 ],
                 Behavior::OneShot,
             ),
             3 => script[p_u].set(
                 &[
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[p_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(450, colors::BLACK)), // 3
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_up(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Fade(FadeColor::new_fade_down(150, colors[k_u])),
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Static(StayColor::new(150, colors::BLACK)), // 1
-                        Behavior::OneShot,
-                    ),
-                    Action::new(
-                        Actions::Sin(Cycler::new(10000.0, 10000, soft_color)),
-                        Behavior::LoopForever,
-                    ),
+                    Action::build().fade_down().for_ms(150).color(colors[p_u]).once().finish(),
+                    Action::build().solid().for_ms(450).color(colors::BLACK).once().finish(),
+                    Action::build().fade_up().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().fade_down().for_ms(150).color(colors[k_u]).once().finish(),
+                    Action::build().solid().for_ms(150).color(colors::BLACK).once().finish(),
+                    Action::build().sin().for_ms(10000).period_ms(10000.0).color(colors[k_u]).forever().finish(),
                 ],
                 Behavior::OneShot,
             ),
