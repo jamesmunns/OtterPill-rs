@@ -1,0 +1,48 @@
+[tasks.objcopy]
+command = "cargo"
+args= [
+    "objcopy",
+    "--bin", "hello-mouse",
+    "--release",
+    "--",
+    "-O", "binary",
+    "target/thumbv6m-none-eabi/release/hello-mouse.bin"
+]
+
+[tasks.dfu-noreset]
+command = "dfu-util"
+args = [
+    "-d", "0483:df11",
+    "-a", "0",
+    "-s", "0x08000000:leave",
+    "-D", "target/thumbv6m-none-eabi/release/hello-mouse.bin"
+]
+dependencies = [
+    "objcopy",
+]
+
+[tasks.dfu]
+dependencies = [
+    "objcopy",
+    # "reset",
+    "dfu-noreset"
+]
+
+[tasks.reset]
+command = "cargo"
+args = [
+    "run",
+    "--manifest-path",
+    "../hello-mouse-cli/Cargo.toml",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--",
+    "reset",
+]
+
+[tasks.flash]
+command = "openocd"
+args = [
+    "-f", "openocd.cfg",
+    "-c", "program target/thumbv6m-none-eabi/release/hello-mouse reset"
+]

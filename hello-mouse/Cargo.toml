@@ -1,0 +1,62 @@
+[package]
+name = "hello-mouse"
+version = "0.1.0"
+authors = ["James Munns <james.munns@ferrous-systems.com>"]
+edition = "2018"
+
+[dependencies]
+stm32f0xx-hal = { version = "0.16.0", features = [ "stm32f072", "rt", "stm32-usbd" ] }
+cortex-m = "0.6"
+cortex-m-rt = "0.6"
+stm32-usbd = { version = "0.5" }
+panic-persist = "0.2.1"
+usb-device = "0.2.1"
+usbd-serial = "0.1"
+embedded-hal = "0.2.3"
+heapless = "0.5"
+cortex-m-rtfm = "0.5"
+postcard = "0.4.3"
+libm = "0.2.1"
+usbd-hid = "0.4"
+
+[dependencies.vintage-icd]
+version = "0.1"
+path = "../vintage-icd"
+
+[dependencies.adafruit-seesaw]
+version = "0.1"
+path = "../adafruit-seesaw"
+
+[dependencies.adafruit-neotrellis]
+version = "0.1"
+path = "../adafruit-neotrellis"
+
+[features]
+default = ["panic-dfu"]
+
+# Feature to reboot directly to DFU on a panic. Prevents recovery
+# of a panic message on next boot. Handy for development
+panic-dfu = []
+
+[profile.release]
+lto             = true
+panic           = "abort"
+debug           = true
+incremental     = false
+codegen-units   = 1
+opt-level       = 's'
+
+[profile.dev]
+lto             = true
+panic           = "abort"
+debug           = true
+incremental     = false
+codegen-units   = 1
+opt-level       = 1
+
+[patch.crates-io.stm32f0xx-hal]
+# path = "../stm32f0xx-hal"
+git = "https://github.com/stm32-rs/stm32f0xx-hal"
+
+# NOTE: more resilient i2c handling
+rev = "8136f6e0ba56db0a1dae7d19e2805d68a3f33ddb"
