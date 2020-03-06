@@ -54,7 +54,7 @@ mod clock;
 //     outgoing: Producer<'static, DeviceToHostMessages, U16, u8>,
 // }
 
-// type HalI2C1 = I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>;
+type HalI2C1 = I2c<I2C1, PB6<Alternate<AF1>>, PB7<Alternate<AF1>>>;
 
 #[app(device = stm32f0xx_hal::stm32, peripherals = true)]
 const APP: () = {
@@ -67,6 +67,7 @@ const APP: () = {
         // buffer: Buffer<U256>,
         // usb_chan: UsbChannels,
         // cli_chan: ClientChannels,
+        i2c: HalI2C1,
         ms_timer: Timer<TIM7>,
         toggle: bool,
         stepdown: u32,
@@ -95,7 +96,7 @@ const APP: () = {
             cx.device.IWDG,
         );
 
-        let (usb_dm, usb_dp, mut led, i2c, delay, ms_timer, wdog) =
+        let (usb_dm, usb_dp, mut led, mut i2c, mut delay, ms_timer, wdog, mut butt_0, mut butt_1, mut butt_2, mut led_b0, mut led_b1, mut led_b2) =
             cortex_m::interrupt::free(|cs| {
                 let mut rcc = rcc
                     .configure()
@@ -109,6 +110,18 @@ const APP: () = {
                 let gpiob = gpiob.split(&mut rcc);
 
                 let led = gpiob.pb13.into_push_pull_output(cs);
+
+                let mut butt_0 = gpiob.pb15.into_floating_input(cs);
+                let mut butt_1 = gpioa.pa8.into_floating_input(cs);
+                let mut butt_2 = gpiob.pb1.into_floating_input(cs);
+
+                let mut led_b0 = gpiob.pb8.into_open_drain_output(cs);
+                let mut led_b1 = gpioa.pa15.into_open_drain_output(cs);
+                let mut led_b2 = gpiob.pb2.into_open_drain_output(cs);
+
+                led_b0.set_high().ok();
+                led_b1.set_high().ok();
+                led_b2.set_high().ok();
 
                 let usb_dm = gpioa.pa11;
                 let usb_dp = gpioa.pa12;
@@ -131,7 +144,7 @@ const APP: () = {
                 let mut wdog = Watchdog::new(wdog);
                 // wdog.start(2.hz());
 
-                (usb_dm, usb_dp, led, i2c, delay, ms_timer, wdog)
+                (usb_dm, usb_dp, led, i2c, delay, ms_timer, wdog, butt_0, butt_1, butt_2, led_b0, led_b1, led_b2)
             });
 
         //////////////////////////////////////////////////////////////////////
@@ -148,7 +161,45 @@ const APP: () = {
             }
         }
 
+        let mut buf_rx = [0u8; 1];
+
+        for _ in 0..50 {
+            // i2c.read(0x21, &mut buf).unwrap();
+            i2c.write_read(0x21, &[0x0C], &mut buf_rx).unwrap();
+            assert_eq!(buf_rx[0], 0xD7);
+            i2c.write_read(0x1F, &[0x0D], &mut buf_rx).unwrap();
+            assert_eq!(buf_rx[0], 0xC7);
+
+            // on on on
+            if butt_0.is_low().unwrap() {
+                led_b0.set_low().ok();
+            } else {
+                led_b0.set_high().ok();
+            }
+            if butt_1.is_low().unwrap() {
+                led_b1.set_low().ok();
+            } else {
+                led_b1.set_high().ok();
+            }
+            if butt_2.is_low().unwrap() {
+                led_b2.set_low().ok();
+            } else {
+                led_b2.set_high().ok();
+            }
+
+            // off off off
+
+
+            led.set_high().ok();
+            delay.delay_ms(25u32);
+            led.set_low().ok();
+            delay.delay_ms(25u32);
+        }
+
         led.set_high().ok();
+
+        i2c.write(0x21, &[0x0D, 0b00_0_00_0_11]).unwrap();
+        i2c.write(0x21, &[0x13, 0b000_100_10]).unwrap();
 
         //////////////////////////////////////////////////////////////////////
         // Set up USB as a CDC ACM Serial Port
@@ -188,6 +239,7 @@ const APP: () = {
             // serial,
             hid,
             led,
+            i2c,
             // trellis,
             // buffer: Buffer::new(),
             // usb_chan: UsbChannels {
@@ -213,6 +265,7 @@ const APP: () = {
     #[task(binds = USB, resources = [
         usb_dev,
         hid,
+        i2c,
         // serial,
         // buffer,
         // usb_chan
@@ -223,15 +276,60 @@ const APP: () = {
         if FLAG.load(Ordering::SeqCst) {
             FLAG.store(false, Ordering::SeqCst);
 
-            let (next, msg) = match STATE {
-                0 => (1, MouseReport{x:   0, y:  64, buttons: 0}),
-                1 => (2, MouseReport{x:  64, y:   0, buttons: 0}),
-                2 => (3, MouseReport{x:   0, y: -64, buttons: 0}),
-                _ => (0, MouseReport{x: -64, y:   0, buttons: 0}),
-            };
-            *STATE = next;
+            let mut out = [0u8; 6];
+            cx.resources.i2c.write_read(
+                0x21,
+                &[0x07],
+                &mut out[..1]
+            ).unwrap();
 
-            cx.resources.hid.push_input(&msg).ok();
+            if (out[0] & 0b0000_1000) != 0 {
+                cx.resources.i2c.write_read(
+                    0x21,
+                    &[0x01],
+                    &mut out
+                ).unwrap();
+
+                // Tweak data
+                let x_raw = i8::from_le_bytes([out[2]]);
+                let y_raw = i8::from_le_bytes([out[0]]);
+
+                let x_notch = match x_raw {
+                        -128 ..= -32 => -128,
+                    x @  -31 ..=  -8 => x * 4,
+                    x @   -7 ..=  -2 => x * 2,
+                    x @   -1 ..=   1 => 0,
+                    x @    2 ..=   7 => x * 2,
+                    x @    8 ..=  31 => x * 4,
+                          32 ..= 127 => 127,
+                };
+
+                let y_notch = match y_raw {
+                        -128 ..= -32 => -128,
+                    y @  -31 ..=  -8 => y * 4,
+                    y @   -7 ..=  -2 => y * 2,
+                    y @   -1 ..=   1 => 0,
+                    y @    2 ..=   7 => y * 2,
+                    y @    8 ..=  31 => y * 4,
+                          32 ..= 127 => 127,
+                };
+
+                let mr = MouseReport {
+                    x: x_notch,
+                    y: y_notch,
+                    buttons: 0,
+                };
+
+                // let (next, msg) = match STATE {
+                //     0 => (1, MouseReport{x:   0, y:  64, buttons: 0}),
+                //     1 => (2, MouseReport{x:  64, y:   0, buttons: 0}),
+                //     2 => (3, MouseReport{x:   0, y: -64, buttons: 0}),
+                //     _ => (0, MouseReport{x: -64, y:   0, buttons: 0}),
+                // };
+                // *STATE = next;
+
+                cx.resources.hid.push_input(&mr).ok();
+            }
         }
 
         cx.resources.usb_dev.poll(&mut [cx.resources.hid]);
@@ -242,7 +340,7 @@ const APP: () = {
         let mut last = clock::RollingClock::get_ms();
 
         loop {
-            if clock::RollingClock::since(last) >= 1000 {
+            if clock::RollingClock::since(last) >= 5 {
                 FLAG.store(true, Ordering::SeqCst);
                 last = clock::RollingClock::get_ms();
             }
