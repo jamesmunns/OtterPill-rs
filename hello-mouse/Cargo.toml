@@ -3,6 +3,7 @@ name = "hello-mouse"
 version = "0.1.0"
 authors = ["James Munns <james.munns@ferrous-systems.com>"]
 edition = "2018"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 stm32f0xx-hal = { version = "0.16.0", features = [ "stm32f072", "rt", "stm32-usbd" ] }
